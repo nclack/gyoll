@@ -1,29 +1,54 @@
-use super::{cursor::Cursor, receiver::Receiver, sender::Sender};
+use std::{alloc::{self,Layout}, collections::HashSet, ptr::NonNull, sync::Arc};
 
-use std::{
-    alloc::{self, Layout},
-    collections::HashSet,
-    ptr::NonNull,
-    sync::Arc,
-};
+use parking_lot::{RwLock,Condvar};
 
-use parking_lot::{Condvar, RwLock};
+use super::{cursor::Cursor, receiver::Receiver, sender::Sender, util::CondvarAny};
 
-pub(crate) struct Channel_ {
+use crate::base::util;
+
+pub(crate) struct RawChannel {
     pub(crate) ptr: NonNull<u8>,
     pub(crate) capacity: usize,
+
+    /// when closing the channel, we stop accepting writes
     pub(crate) is_accepting_writes: bool,
     pub(crate) high_mark: isize,
-    pub(crate) space_available: Condvar,
+    pub(crate) space_available: util::CondvarAny,
+
     /// max of all writers
     pub(crate) head: Cursor,
     pub(crate) outstanding_writes: HashSet<Cursor>,
     pub(crate) outstanding_reads: HashSet<Cursor>,
 }
 
-pub struct Channel(pub(crate) Arc<RwLock<Channel_>>);
+impl RawChannel {
+    fn new(nbytes: usize) -> Self {
+        // Align to 4096
+        let layout = Layout::from_size_align(nbytes, 1 << 12).unwrap();
+        let ptr = unsafe { std::alloc::alloc(layout) };
+        let ptr = match NonNull::new(ptr) {
+            Some(p) => p,
+            None => std::alloc::handle_alloc_error(layout),
+        };
 
-impl Drop for Channel_ {
+        Self {
+            ptr,
+            capacity: nbytes,
+            is_accepting_writes: true,
+            high_mark: 0,
+            space_available: CondvarAny::new(),
+            head: Cursor::zero(),
+            outstanding_writes: HashSet::new(),
+            outstanding_reads: HashSet::new(),
+        }
+    }
+
+    pub(crate) fn min_read_pos(&self) -> Option<&Cursor> {
+        self.outstanding_reads.iter().min()
+    }
+}
+
+impl Drop for RawChannel {
     fn drop(&mut self) {
         if self.capacity > 0 {
             unsafe {
@@ -34,25 +59,11 @@ impl Drop for Channel_ {
     }
 }
 
+pub struct Channel(pub(crate) Arc<RwLock<RawChannel>>);
+
 impl Channel {
     pub fn new(nbytes: usize) -> Self {
-        // Align to 4096
-        let layout = Layout::from_size_align(nbytes, 1 << 12).unwrap();
-        let ptr = unsafe { alloc::alloc(layout) };
-        let ptr = match NonNull::new(ptr) {
-            Some(p) => p,
-            None => alloc::handle_alloc_error(layout),
-        };
-        Channel(Arc::new(RwLock::new(Channel_ {
-            ptr,
-            capacity: nbytes,
-            is_accepting_writes: true,
-            high_mark: 0,
-            space_available: Condvar::new(),
-            head: Cursor::zero(),
-            outstanding_writes: HashSet::new(),
-            outstanding_reads: HashSet::new(),
-        })))
+        Channel(Arc::new(RwLock::new(RawChannel::new(nbytes))))
     }
 
     pub fn stop(&self) {

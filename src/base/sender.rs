@@ -1,19 +1,22 @@
 use std::{mem::size_of_val, sync::Arc};
 
-use parking_lot::RwLock;
+use parking_lot::{RwLock, RwLockUpgradableReadGuard};
+use parking_lot::lock_api::RawRwLockUpgrade;
 
 use super::{
-    channel::{Channel, Channel_},
+    channel::{Channel,RawChannel},
     cursor::Cursor,
     region::MutRegion,
 };
 
 pub struct Sender {
-    channel: Arc<RwLock<Channel_>>,
+    channel: Arc<RwLock<RawChannel>>,
 }
 
 unsafe impl Send for Sender {}
 unsafe impl Sync for Sender {}
+
+
 
 impl Sender {
     pub(crate) fn new(channel: &Channel) -> Self {
@@ -29,50 +32,68 @@ impl Sender {
     /// Returns None when the channel is unwritable or `nbytes` exceeds the
     /// channels `capacity`.
     pub fn map(&mut self, nbytes: usize) -> Option<MutRegion> {
-        if nbytes > self.channel.read().capacity {
-            None
-        } else {
-            // 1. Get the address of the region
-            // 2. Move the head
-            let (cur, ptr) = {
-                let mut c = self.channel.write();
-
-                if !c.is_accepting_writes {
-                    return None; // See Note A.
-                }
-
-                // TODO: block when space isn't available
-
-                let cur = c.head.offset;
-                let (beg, end) = c.head.inc_region(nbytes, c.capacity);
-
-                while end > *c.outstanding_reads.iter().min().unwrap_or(&end) {
-                    c.space_available.wait(c);
-                }
-
-                c.outstanding_writes.insert(beg.clone());
-                c.head = end;
-
-                if beg.offset == 0 {
-                    c.high_mark = cur;
-                }
-
-                // See Note B.
-                let ptr = unsafe { c.ptr.as_ptr().offset(beg.offset) };
-                (beg, ptr)
-            };
-
-            // 3. Construct the region
-            let buf = unsafe {
-                *(ptr as *mut usize) = nbytes;
-                std::slice::from_raw_parts_mut(ptr.offset(size_of_val(&nbytes) as _), nbytes)
-            };
-            Some(MutRegion {
-                owner: self,
-                cur,
-                buf,
-            })
+        
+        let mut ch = self.channel.upgradable_read();
+        
+        if nbytes>ch.capacity || !ch.is_accepting_writes {
+            return None;
         }
+
+        let cur = ch.head.offset;
+        let inc = ch.head.next_region(nbytes, ch.capacity);
+
+        let cv=&self.channel.space_available;
+        if inc.end > *ch.min_read_pos().unwrap_or(&inc.end) {
+            cv.wait2(&mut ch);
+        }
+
+        let ch2 = RwLockUpgradableReadGuard::upgrade(ch);
+        todo!()
+
+        // if nbytes > self.channel.read().capacity {
+        //     None
+        // } else {
+        //     // 1. Get the address of the region
+        //     // 2. Move the head
+        //     let (cur, ptr) = {
+        //         let mut c = self.channel.write();
+
+        //         if !c.is_accepting_writes {
+        //             return None; // See Note A.
+        //         }
+
+        //         // TODO: block when space isn't available
+
+                // let cur = c.head.offset;
+                // let (beg, end) = c.head.inc_region(nbytes, c.capacity);
+
+        //         while end > *c.outstanding_reads.iter().min().unwrap_or(&end) {
+        //             c.space_available.wait(c);
+        //         }
+
+        //         c.outstanding_writes.insert(beg.clone());
+        //         c.head = end;
+
+        //         if beg.offset == 0 {
+        //             c.high_mark = cur;
+        //         }
+
+        //         // See Note B.
+        //         let ptr = unsafe { c.ptr.as_ptr().offset(beg.offset) };
+        //         (beg, ptr)
+        //     };
+
+        //     // 3. Construct the region
+        //     let buf = unsafe {
+        //         *(ptr as *mut usize) = nbytes;
+        //         std::slice::from_raw_parts_mut(ptr.offset(size_of_val(&nbytes) as _), nbytes)
+        //     };
+        //     Some(MutRegion {
+        //         owner: self,
+        //         cur,
+        //         buf,
+        //     })
+        // }
     }
 
     pub(crate) fn release(&self, beg: &Cursor) {

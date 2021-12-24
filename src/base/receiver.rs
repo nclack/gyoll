@@ -5,10 +5,10 @@ use std::{
 
 use parking_lot::RwLock;
 
-use super::{channel::Channel_, cursor::Cursor, region::Region, Channel};
+use super::{channel::RawChannel, cursor::Cursor, region::Region, Channel};
 
 pub struct Receiver {
-    channel: Arc<RwLock<Channel_>>,
+    channel: Arc<RwLock<RawChannel>>,
     cur: Cursor,
 }
 
