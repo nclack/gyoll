@@ -1,10 +1,13 @@
-use std::{alloc::{self,Layout}, collections::HashSet, ptr::NonNull, sync::Arc};
+use std::{
+    alloc::{self, Layout},
+    collections::HashSet,
+    ptr::NonNull,
+    sync::Arc,
+};
 
-use parking_lot::{RwLock,Condvar};
+use parking_lot::{Condvar, RwLock, Mutex};
 
-use super::{cursor::Cursor, receiver::Receiver, sender::Sender, util::CondvarAny};
-
-use crate::base::util;
+use super::{cursor::Cursor, receiver::Receiver, sender::Sender};
 
 pub(crate) struct RawChannel {
     pub(crate) ptr: NonNull<u8>,
@@ -13,10 +16,13 @@ pub(crate) struct RawChannel {
     /// when closing the channel, we stop accepting writes
     pub(crate) is_accepting_writes: bool,
     pub(crate) high_mark: isize,
-    pub(crate) space_available: util::CondvarAny,
 
     /// max of all writers
     pub(crate) head: Cursor,
+
+    /// max of all readers
+    pub(crate) tail: Cursor,
+
     pub(crate) outstanding_writes: HashSet<Cursor>,
     pub(crate) outstanding_reads: HashSet<Cursor>,
 }
@@ -36,15 +42,19 @@ impl RawChannel {
             capacity: nbytes,
             is_accepting_writes: true,
             high_mark: 0,
-            space_available: CondvarAny::new(),
             head: Cursor::zero(),
+            tail: Cursor::zero(),
             outstanding_writes: HashSet::new(),
             outstanding_reads: HashSet::new(),
         }
     }
 
-    pub(crate) fn min_read_pos(&self) -> Option<&Cursor> {
-        self.outstanding_reads.iter().min()
+    pub(crate) fn min_read_pos(&self) -> &Cursor {
+        self.outstanding_reads.iter().min().unwrap_or(&self.tail)
+    }
+
+    pub(crate) fn min_write_pos(&self) -> &Cursor {
+        self.outstanding_writes.iter().min().unwrap_or(&self.head)
     }
 }
 
@@ -59,22 +69,27 @@ impl Drop for RawChannel {
     }
 }
 
-pub struct Channel(pub(crate) Arc<RwLock<RawChannel>>);
+pub struct Channel {
+    pub(crate) inner: Mutex<RawChannel>,
+    pub(crate) space_available: Condvar,
+}
 
 impl Channel {
-    pub fn new(nbytes: usize) -> Self {
-        Channel(Arc::new(RwLock::new(RawChannel::new(nbytes))))
+    pub(crate) fn new(nbytes: usize) -> Self {
+        Channel {
+            inner: Mutex::new(RawChannel::new(nbytes)),
+            space_available: Condvar::new(),
+        }
     }
 
-    pub fn stop(&self) {
-        self.0.write().is_accepting_writes = false;
+    pub fn close(&self) {
+        let mut ch=self.inner.lock();
+        ch.is_accepting_writes = false;
+        self.space_available.notify_all();
     }
+}
 
-    pub fn sender(&self) -> Sender {
-        Sender::new(self)
-    }
-
-    pub fn receiver(&self) -> Receiver {
-        Receiver::new(self)
-    }
+pub fn channel(nbytes: usize) -> (Sender, Receiver) {
+    let ch = Arc::new(Channel::new(nbytes));
+    (Sender::new(ch.clone()), Receiver::new(ch.clone()))
 }

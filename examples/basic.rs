@@ -2,50 +2,80 @@
 
 use std::{
     thread::{sleep, spawn},
-    time::Duration,
+    time::Duration, sync::Arc,
 };
 
 use anyhow::{anyhow, Result};
-use gyoll::base::Channel;
+use gyoll::base::channel;
+use parking_lot::Mutex;
 
 fn main() -> Result<()> {
-    let c = Channel::new(1 << 10);
+    let (mut tx, mut rx) = channel(1 << 20);
+    let ch = tx.channel().clone();
 
-    let mut tx = c.sender();
-    let mut rx = c.receiver();
+    let ticker_running = Arc::new(Mutex::new(true));
+    {
+        let running = ticker_running.clone();
+        let ticker = spawn(move || {
+            while *running.lock() {
+                println!("tick");
+                sleep(Duration::from_millis(200));
+            }
+        });
+    }
 
     let producer = spawn(move || {
         // NOTE: name - map() - alternatives get,request,
-
-        while let Some(mut buf) = tx.map(13) {
+        println!("Entering Writer");
+        let mut written_bytes = 0;
+        while let Some(mut buf) = tx.map(1<<12) {
             // NOTE: tx get's mutable borrowed by map() so that
             //       calling it here becomes a compiler error
             // tx.map(13); // <-- doesn't work
-            println!("Write");
-
-            for (k, v) in buf.iter_mut().zip(0u8..) {
-                *k = v;
+            for (k, v) in buf.iter_mut().zip(0u16..) {
+                *k = v as u8;
             }
-            sleep(Duration::from_millis(200));
+            written_bytes += buf.len();
+            // println!("Write - total: {}",written_bytes);
+            // sleep(Duration::from_millis(1));
         }
+        println!("Write - total: {}", written_bytes);
+        println!("Exiting Writer");
     });
 
     let consumer = spawn(move || {
+        println!("Entering Reader");
+        let mut read_bytes = 0;
         // TODO: what are the shutdown/disconnect rules?
+        let mut first = None;
         while rx.is_open() {
             // TODO: get rid of is_open()...use some other iterable or change next
             while let Some(available) = rx.next() {
                 // rx.next(); // <-- doesn't work bc rx is mut
-                println!("Read");
-                println!("{:?}", available.as_ref());
-                sleep(Duration::from_millis(1000));
+                if first.is_none() {
+                    first = Some(available.as_ptr() as isize);
+                }
+                read_bytes += available.len();
+                // println!(
+                //     // "0x{:0x} {:4}:{:4}",
+                //     "0x{:0x} {:4}:{:4} - {:?}",
+                //     available.as_ptr() as isize,
+                //     available.as_ptr() as isize - first.unwrap(),
+                //     available.as_ptr() as isize - first.unwrap() + available.len() as isize,
+                //     &available[0..std::cmp::min(20, available.len())]
+                // );
+                // drop(available);
+                // sleep(Duration::from_millis(1));
             }
         }
+        println!("Read - total: {} ({} GB)", read_bytes, (read_bytes as f32)*1e-9);
+        println!("Exiting Reader");
     });
 
-    sleep(Duration::from_secs(5));
-    c.stop();
+    sleep(Duration::from_secs(1));
+    ch.close();
     println!("STOP");
+    *ticker_running.lock() = false;
 
     producer.join().map_err(|_| anyhow!("Producer failed"))?;
     consumer.join().map_err(|_| anyhow!("Consumer failed"))?;

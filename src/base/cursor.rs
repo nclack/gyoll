@@ -1,4 +1,6 @@
-#[derive(Default, Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Hash)]
+use std::fmt::Display;
+
+#[derive(Default, Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
 pub(crate) struct Cursor {
     pub(crate) cycle: isize,
     pub(crate) offset: isize,
@@ -12,7 +14,30 @@ pub(crate) struct Increment {
     pub(crate) end: Cursor,
 
     /// If set, the buffer wrapped around and this was the high water mark.
-    pub(crate) high_mark :Option<isize>
+    pub(crate) high_mark: Option<isize>,
+}
+
+impl Display for Increment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(high) = self.high_mark {
+            write!(
+                f,
+                "{cycle:6}: {beg:6}-{end:6} high:{high}",
+                cycle = self.beg.cycle,
+                beg = self.beg.offset,
+                end = self.end.offset,
+                high = high
+            )
+        } else {
+            write!(
+                f,
+                "{cycle:6}: {beg:6}-{end:6}",
+                cycle = self.beg.cycle,
+                beg = self.beg.offset,
+                end = self.end.offset,
+            )
+        }
+    }
 }
 
 impl Cursor {
@@ -30,19 +55,32 @@ impl Cursor {
         if self.offset + amount > capacity {
             let cycle = self.cycle + 1;
             let beg = Cursor { offset: 0, cycle };
-            let end =Cursor {
-                    offset: amount,
-                    cycle,
-                };
-            Increment {beg,end,high_mark: Some(self.offset)}
+            let end = Cursor {
+                offset: amount,
+                cycle,
+            };
+            Increment {
+                beg,
+                end,
+                high_mark: Some(self.offset),
+            }
         } else {
-            let beg=self.clone();
-            let end =Cursor {
-                    offset: self.offset + amount,
-                    cycle: self.cycle,
-                };
-            Increment{beg,end,high_mark:None}
+            let end = Cursor {
+                offset: self.offset + amount,
+                cycle: self.cycle,
+            };
+            Increment {
+                beg: *self,
+                end,
+                high_mark: None,
+            }
         }
+    }
+}
+
+impl Display for Cursor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}({})", self.offset, self.cycle)
     }
 }
 
@@ -64,18 +102,23 @@ mod tests {
         let c = Cursor::zero();
         
         // no wrap
-        let (beg, end) = c.next_region(10, 20);
-        assert_eq!(beg, Cursor{offset:0,cycle:0});
-        assert_eq!(end, Cursor{offset:10,cycle:0});
+        let inc = c.next_region(10, 20);
+        assert_eq!(inc.beg, Cursor{offset:0,cycle:0});
+        assert_eq!(inc.end, Cursor{offset:10,cycle:0});
 
         // no wrap - exact fit
-        let (beg, end) = end.inc_region(10, 20);
-        assert_eq!(beg, Cursor{offset:10,cycle:0});
-        assert_eq!(end, Cursor{offset:20,cycle:0});
+        let inc = inc.end.next_region(10, 20);
+        assert_eq!(inc.beg, Cursor{offset:10,cycle:0});
+        assert_eq!(inc.end, Cursor{offset:20,cycle:0});
         
         // wrap
-        let (beg, end) = beg.inc_region(15, 20);
-        assert_eq!(beg, Cursor{offset:0,cycle:1});
-        assert_eq!(end, Cursor{offset:15,cycle:1});
+        let inc = inc.beg.next_region(15, 20);
+        assert_eq!(inc.beg, Cursor{offset:0,cycle:1});
+        assert_eq!(inc.end, Cursor{offset:15,cycle:1});
+
+        // wrap - can't fit
+        let inc = inc.end.next_region(15, 20);
+        assert_eq!(inc.beg, Cursor{offset:0,cycle:2});
+        assert_eq!(inc.end, Cursor{offset:15,cycle:2});
     }
 }

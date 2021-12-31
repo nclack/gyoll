@@ -1,28 +1,28 @@
 use std::{mem::size_of_val, sync::Arc};
 
-use parking_lot::{RwLock, RwLockUpgradableReadGuard};
 use parking_lot::lock_api::RawRwLockUpgrade;
+use parking_lot::{RwLock, RwLockUpgradableReadGuard};
 
 use super::{
-    channel::{Channel,RawChannel},
+    channel::{Channel, RawChannel},
     cursor::Cursor,
     region::MutRegion,
 };
 
 pub struct Sender {
-    channel: Arc<RwLock<RawChannel>>,
+    channel: Arc<Channel>,
 }
 
 unsafe impl Send for Sender {}
 unsafe impl Sync for Sender {}
 
-
-
 impl Sender {
-    pub(crate) fn new(channel: &Channel) -> Self {
-        Sender {
-            channel: channel.0.clone(),
-        }
+    pub(crate) fn new(channel: Arc<Channel>) -> Self {
+        Sender { channel }
+    }
+
+    pub fn channel(&self) -> &Arc<Channel> {
+        &self.channel
     }
 
     /// Reserves a mutable region of the channel.
@@ -32,85 +32,65 @@ impl Sender {
     /// Returns None when the channel is unwritable or `nbytes` exceeds the
     /// channels `capacity`.
     pub fn map(&mut self, nbytes: usize) -> Option<MutRegion> {
-        
-        let mut ch = self.channel.upgradable_read();
-        
-        if nbytes>ch.capacity || !ch.is_accepting_writes {
-            return None;
-        }
+        let (cur, ptr) = {
+            let mut ch = self.channel.inner.lock();
 
-        let cur = ch.head.offset;
-        let inc = ch.head.next_region(nbytes, ch.capacity);
+            if nbytes > ch.capacity || !ch.is_accepting_writes {
+                return None;
+            }
 
-        let cv=&self.channel.space_available;
-        if inc.end > *ch.min_read_pos().unwrap_or(&inc.end) {
-            cv.wait2(&mut ch);
-        }
+            let inc = ch.head.next_region(nbytes, ch.capacity);
 
-        let ch2 = RwLockUpgradableReadGuard::upgrade(ch);
-        todo!()
+            fn collide(w: &Cursor, r: &Cursor) -> bool {
+                // On the same cycle, there can be no collision bc r<=w.
+                // Otherwise,
+                w.cycle > r.cycle && w.offset >= r.offset
+            }
 
-        // if nbytes > self.channel.read().capacity {
-        //     None
-        // } else {
-        //     // 1. Get the address of the region
-        //     // 2. Move the head
-        //     let (cur, ptr) = {
-        //         let mut c = self.channel.write();
+            while collide(&inc.end, ch.min_read_pos()) && ch.is_accepting_writes {
+                // println!("     - {} r:{}",inc,ch.min_read_pos());
+                self.channel.space_available.wait(&mut ch);
+                // println!("exit - {} r:{}",inc,ch.min_read_pos());
+            }
 
-        //         if !c.is_accepting_writes {
-        //             return None; // See Note A.
-        //         }
+            if !ch.is_accepting_writes {
+                return None;
+            }
 
-        //         // TODO: block when space isn't available
+            // At this point there's space available so we're ready to reserve
+            // the region.
 
-                // let cur = c.head.offset;
-                // let (beg, end) = c.head.inc_region(nbytes, c.capacity);
+            ch.outstanding_writes.insert(inc.beg);
+            ch.head = inc.end;
+            if let Some(high_mark) = inc.high_mark {
+                ch.high_mark = high_mark;
+            }
+            let ptr = unsafe { ch.ptr.as_ptr().offset(inc.beg.offset) };
+            (inc.beg, ptr)
+        };
 
-        //         while end > *c.outstanding_reads.iter().min().unwrap_or(&end) {
-        //             c.space_available.wait(c);
-        //         }
-
-        //         c.outstanding_writes.insert(beg.clone());
-        //         c.head = end;
-
-        //         if beg.offset == 0 {
-        //             c.high_mark = cur;
-        //         }
-
-        //         // See Note B.
-        //         let ptr = unsafe { c.ptr.as_ptr().offset(beg.offset) };
-        //         (beg, ptr)
-        //     };
-
-        //     // 3. Construct the region
-        //     let buf = unsafe {
-        //         *(ptr as *mut usize) = nbytes;
-        //         std::slice::from_raw_parts_mut(ptr.offset(size_of_val(&nbytes) as _), nbytes)
-        //     };
-        //     Some(MutRegion {
-        //         owner: self,
-        //         cur,
-        //         buf,
-        //     })
-        // }
+        // Finally, construct the region
+        let buf = unsafe { std::slice::from_raw_parts_mut(ptr, nbytes) };
+        Some(MutRegion {
+            owner: self,
+            cur,
+            buf,
+        })
     }
 
-    pub(crate) fn release(&self, beg: &Cursor) {
-        let mut c = self.channel.write();
-        c.outstanding_writes.remove(beg);
+    pub(crate) fn unreserve(&self, beg: &Cursor) {
+        self.channel.inner.lock().outstanding_writes.remove(beg);
     }
 }
 
 #[cfg(test)]
 mod test {
-    use crate::base::{cursor::Cursor, region::MutRegion, Channel};
+    use crate::base::{channel, cursor::Cursor, region::MutRegion};
 
     #[test]
     #[rustfmt::skip]
     fn send_wrap_behavior() {
-        let c = Channel::new(13);
-        let mut tx = c.sender();
+        let (mut tx,mut rx)=channel(13);
         {
             let reg = tx.map(5).unwrap();
             assert_eq!(reg.cur,Cursor { cycle: 0, offset: 0 });
@@ -119,29 +99,15 @@ mod test {
             let reg = tx.map(5).unwrap();
             assert_eq!(reg.cur,Cursor { cycle: 0, offset: 5 });
         }
+        while rx.next().is_some() {}; // drain so we can continue
         {
             let reg = tx.map(5).unwrap();
             assert_eq!(reg.cur,Cursor { cycle: 1, offset: 0 });
-            let c=c.0.read();
+        }
+        {
+            let c=tx.channel.inner.lock();
             assert_eq!(c.high_mark,10);
             assert_eq!(c.head,Cursor{ cycle: 1, offset: 5 });
         }
     }
 }
-
-/* NOTES
-
-A.  Why wait on a write lock for this check (rather than a read)?
-
-    Acquiring a lock twice in the same function is expensive. (assumed)
-
-    This check is important when shutting down the channel. Sometimes it's
-    worth acquiring a read lock because it allows one to skip enough write
-    lock acquisitions.  That is, the average number of locks acquired per call
-    becomes ~1.  That's not the case here.
-
-B.  It's possible to delay computation of the pointer till it's needed. It
-    doesn't need to be computed here. Delaying would save some space in the
-    Sender struct but that's not important.  It also requires a read lock in
-    rust.
- */
