@@ -75,7 +75,7 @@ pub struct Channel {
 }
 
 impl Channel {
-    pub(crate) fn new(nbytes: usize) -> Self {
+    pub fn new(nbytes: usize) -> Self {
         Channel {
             inner: Mutex::new(RawChannel::new(nbytes)),
             space_available: Condvar::new(),
@@ -89,7 +89,22 @@ impl Channel {
     }
 }
 
+pub trait ChannelFactory {
+    fn sender(&self)->Sender;
+    fn receiver(&self)->Receiver;
+}
+
+impl ChannelFactory for Arc<Channel> {
+    fn sender(&self)->Sender {
+        Sender::new(self.clone())
+    }
+
+    fn receiver(&self)->Receiver {
+        Receiver::new(self.clone())
+    }
+}
+
 pub fn channel(nbytes: usize) -> (Sender, Receiver) {
     let ch = Arc::new(Channel::new(nbytes));
-    (Sender::new(ch.clone()), Receiver::new(ch.clone()))
+    (ch.sender(),ch.receiver())
 }

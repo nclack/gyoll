@@ -9,4 +9,8 @@ edition = "2021"
 parking_lot= "0.11"
 
 [dev-dependencies]
-anyhow="1.0"
+criterion={version="0.3",features = ["html_reports"]}
+
+[[bench]]
+name="spsc"
+harness=false

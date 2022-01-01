@@ -26,9 +26,10 @@ unsafe impl Sync for Receiver {}
 
 impl Receiver {
     pub(crate) fn new(channel: Arc<Channel>) -> Self {
+        let cur=channel.inner.lock().head;
         Receiver {
             channel,
-            cur: Cursor::zero(),
+            cur,
         }
     }
 
@@ -58,8 +59,8 @@ impl Receiver {
 
             let w = ch.min_write_pos();
 
-            assert!(self.cur <= *w);
-            assert!(w.cycle - self.cur.cycle <= 1);
+            assert!(self.cur <= *w,"w:{} r:{}",w,self.cur);
+            assert!(w.cycle - self.cur.cycle <= 1,"w:{} r:{}",w,self.cur);
 
             if self.cur == *w {
                 // The read pos is at the min writer pos.  There is no data

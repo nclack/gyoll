@@ -5,12 +5,11 @@ use std::{
     time::Duration, sync::Arc,
 };
 
-use anyhow::{anyhow, Result};
 use gyoll::base::channel;
 use parking_lot::Mutex;
 
-fn main() -> Result<()> {
-    let (mut tx, mut rx) = channel(1 << 20);
+fn main()  {
+    let (mut tx, mut rx) = channel(1 << 24);
     let ch = tx.channel().clone();
 
     let ticker_running = Arc::new(Mutex::new(true));
@@ -28,6 +27,7 @@ fn main() -> Result<()> {
         // NOTE: name - map() - alternatives get,request,
         println!("Entering Writer");
         let mut written_bytes = 0;
+        // FIXME: There's some problem when the chunksize is >= (N/2)+1 - won't proceed
         while let Some(mut buf) = tx.map(1<<12) {
             // NOTE: tx get's mutable borrowed by map() so that
             //       calling it here becomes a compiler error
@@ -77,8 +77,6 @@ fn main() -> Result<()> {
     println!("STOP");
     *ticker_running.lock() = false;
 
-    producer.join().map_err(|_| anyhow!("Producer failed"))?;
-    consumer.join().map_err(|_| anyhow!("Consumer failed"))?;
-
-    Ok(())
+    producer.join().expect("Producer failed");
+    consumer.join().expect("Consumer failed");
 }

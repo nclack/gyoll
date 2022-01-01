@@ -4,4 +4,4 @@ mod receiver;
 mod region;
 mod sender;
 
-pub use channel::channel;
+pub use channel::{channel,Channel,ChannelFactory};
