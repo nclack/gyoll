@@ -101,9 +101,8 @@ impl Receiver {
                 }
             };
             let ptr = unsafe { ch.ptr.as_ptr().offset(beg.offset) as *const _ };
-            // let mut ch = RwLockUpgradableReadGuard::upgrade(ch);
-            // ch.outstanding_reads.insert(beg);
-            ch.tail = std::cmp::max(ch.tail, end);
+            ch.outstanding_reads.insert(beg);
+            ch.tail=std::cmp::max(ch.tail,end);
             (beg, end, ptr, len)
         };
         self.cur = end;
