@@ -119,6 +119,7 @@ impl Receiver {
 
     pub(crate) fn unreserve(&mut self, beg: &Cursor) {
         let mut ch = self.channel.inner.lock();
+        println!("Release read at {}",beg);
         ch.outstanding_reads.remove(beg);
         self.channel.space_available.notify_all();
     }

@@ -42,16 +42,20 @@ impl Sender {
             let inc = ch.head.next_region(nbytes, ch.capacity);
 
             fn collide(w: &Cursor, r: &Cursor) -> bool {
-                // On the same cycle, there can be no collision bc r<=w.
+
+                // On the same cycle, there can be no collision bc enforce r<=w elsewhere.
                 // Otherwise,
-                w.cycle > r.cycle && w.offset >= r.offset
+                w.cycle > r.cycle && (w.offset > r.offset || w.cycle>r.cycle+1)
+                // The w.cycle>r.cycle+1 case handles when the first unread
+                // byte is hanging off the end of the cycle.
             }
 
             while collide(&inc.end, ch.min_read_pos()) && ch.is_accepting_writes {
                 println!("     - {} r:{}",inc,ch.min_read_pos());
                 self.channel.space_available.wait(&mut ch);
                 println!("exit - {} r:{}",inc,ch.min_read_pos());
-            }
+            } 
+            assert!(inc.beg.cycle-ch.min_read_pos().cycle<2,"inc:{} r:{}",inc,ch.min_read_pos());
 
             if !ch.is_accepting_writes {
                 return None;
@@ -79,7 +83,8 @@ impl Sender {
     }
 
     pub(crate) fn unreserve(&self, beg: &Cursor) {
-        self.channel.inner.lock().outstanding_writes.remove(beg);
+        let mut ch=self.channel.inner.lock();
+        ch.outstanding_writes.remove(beg);
     }
 }
 

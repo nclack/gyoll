@@ -3,8 +3,8 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
-    thread::{sleep, spawn, JoinHandle},
-    time::Duration,
+    thread::{sleep, spawn, JoinHandle, self},
+    time::Duration, panic, process,
 };
 
 use gyoll::base::{Channel, ChannelFactory, Receiver, Sender};
@@ -29,39 +29,30 @@ fn ticker() -> Ticker {
 
 fn producer(tx: Sender, name: &'static str) -> (JoinHandle<()>, &str) {
     let mut tx = tx;
-    let th = spawn(move || {
-        // NOTE: name - map() - alternatives get,request,
+    let th = thread::Builder::new().name(name.into()).spawn(move || {
         println!("{}: Entering Writer", name);
         let mut written_bytes = 0;
-        // FIXME: There's some problem when the chunksize is >= (N/2)+1 - won't proceed
         while let Some(mut buf) = tx.map(13) {
-            // NOTE: tx get's mutable borrowed by map() so that
-            //       calling it here becomes a compiler error
-            // tx.map(13); // <-- doesn't work
             for (k, v) in buf.iter_mut().zip(0u16..) {
                 *k = v as u8;
             }
             written_bytes += buf.len();
-            // println!("{}: Write - total: {}", name, written_bytes);
             // sleep(Duration::from_millis(2));
         }
         println!("{}: Write - total: {}", name, written_bytes);
         println!("{}: Exiting Writer", name);
-    });
+    }).unwrap();
     (th, name)
 }
 
 fn consumer(rx: Receiver, name: &'static str) -> (JoinHandle<()>, &str) {
     let mut rx = rx;
-    let th = spawn(move || {
+    let th = thread::Builder::new().name(name.into()).spawn(move || {
         println!("{}: Entering Reader", name);
         let mut read_bytes = 0;
-        // TODO: what are the shutdown/disconnect rules?
         let mut first = None;
         while rx.is_open() {
-            // TODO: get rid of is_open()...use some other iterable or change next
             while let Some(available) = rx.next() {
-                // rx.next(); // <-- doesn't work bc rx is mut
                 if first.is_none() {
                     first = Some(available.as_ptr() as isize);
                 }
@@ -85,11 +76,24 @@ fn consumer(rx: Receiver, name: &'static str) -> (JoinHandle<()>, &str) {
             (read_bytes as f32) * 1e-9
         );
         println!("{}: Exiting Reader", name);
-    });
+    }).unwrap();
     (th, name)
 }
 
 fn main() {
+
+    // Install a custom panic handler so the process exits if there's a 
+    // panic in a thread.
+
+    let orig_hook = panic::take_hook();
+    panic::set_hook(Box::new(move |panic_info| {
+        // invoke the default handler and exit the process
+        orig_hook(panic_info);
+        process::exit(1);
+    }));
+
+    // Get down to business
+
     let ch = Arc::new(Channel::new(1 << 12));
 
     let threads = [

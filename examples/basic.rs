@@ -2,14 +2,26 @@
 
 use std::{
     thread::{sleep, spawn},
-    time::Duration, sync::Arc,
+    time::Duration, sync::Arc, panic, process,
 };
 
 use gyoll::base::channel;
 use parking_lot::Mutex;
 
 fn main()  {
-    let (mut tx, mut rx) = channel(1 << 24);
+    // Install a custom panic handler so the process exits if there's a 
+    // panic in a thread.
+
+    let orig_hook = panic::take_hook();
+    panic::set_hook(Box::new(move |panic_info| {
+        // invoke the default handler and exit the process
+        orig_hook(panic_info);
+        process::exit(1);
+    }));
+
+    
+
+    let (mut tx, mut rx) = channel(1 << 12);
     let ch = tx.channel().clone();
 
     let ticker_running = Arc::new(Mutex::new(true));
@@ -28,7 +40,7 @@ fn main()  {
         println!("Entering Writer");
         let mut written_bytes = 0;
         // FIXME: There's some problem when the chunksize is >= (N/2)+1 - won't proceed
-        while let Some(mut buf) = tx.map(1<<12) {
+        while let Some(mut buf) = tx.map(17) {
             // NOTE: tx get's mutable borrowed by map() so that
             //       calling it here becomes a compiler error
             // tx.map(13); // <-- doesn't work
@@ -57,12 +69,12 @@ fn main()  {
                 }
                 read_bytes += available.len();
                 // println!(
-                //     // "0x{:0x} {:4}:{:4}",
-                //     "0x{:0x} {:4}:{:4} - {:?}",
+                //     "0x{:0x} {:4}:{:4}",
+                //     // "0x{:0x} {:4}:{:4} - {:?}",
                 //     available.as_ptr() as isize,
                 //     available.as_ptr() as isize - first.unwrap(),
                 //     available.as_ptr() as isize - first.unwrap() + available.len() as isize,
-                //     &available[0..std::cmp::min(20, available.len())]
+                //     // &available[0..std::cmp::min(20, available.len())]
                 // );
                 // drop(available);
                 // sleep(Duration::from_millis(1));
