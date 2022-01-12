@@ -22,7 +22,8 @@ criterion_group!(benches, criterion_benchmark);
 criterion_main!(benches);
 
 macro_rules! debug {
-    ($($e:expr),*) => {println!( $($e),* )}
+    // ($($e:expr),*) => {println!( $($e),* )}
+    ($($e:expr),*) => {}
 }
 
 struct Env {

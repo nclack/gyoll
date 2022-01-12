@@ -4,7 +4,7 @@ use std::{
         Arc,
     },
     thread::{sleep, spawn, JoinHandle, self},
-    time::Duration, panic, process,
+    time::{Duration}, panic, process,
 };
 
 use gyoll::base::{Channel, ChannelFactory, Receiver, Sender};
@@ -27,19 +27,16 @@ fn ticker() -> Ticker {
     }
 }
 
-fn producer(tx: Sender, name: &'static str) -> (JoinHandle<()>, &str) {
+fn producer(tx: Sender, name: &'static str, payload_size: usize) -> (JoinHandle<()>, &str) {
     let mut tx = tx;
     let th = thread::Builder::new().name(name.into()).spawn(move || {
         println!("{}: Entering Writer", name);
         let mut written_bytes = 0;
-        while let Some(mut buf) = tx.map(13) {
-            for (k, v) in buf.iter_mut().zip(0u16..) {
-                *k = v as u8;
-            }
+        while let Some(buf) = tx.map(payload_size) {
             written_bytes += buf.len();
-            // sleep(Duration::from_millis(2));
+            // sleep(Duration::from_millis(10));
         }
-        println!("{}: Write - total: {}", name, written_bytes);
+        println!("{}: Write - total: {} bytes. {} ops", name, written_bytes, written_bytes/payload_size);
         println!("{}: Exiting Writer", name);
     }).unwrap();
     (th, name)
@@ -57,16 +54,16 @@ fn consumer(rx: Receiver, name: &'static str) -> (JoinHandle<()>, &str) {
                     first = Some(available.as_ptr() as isize);
                 }
                 read_bytes += available.len();
-                println!(
-                    "{}: 0x{:0x} {:4}:{:4}",
-                    // "{}: 0x{:0x} {:4}:{:4} - {:?}",
-                    name,
-                    available.as_ptr() as isize,
-                    available.as_ptr() as isize - first.unwrap(),
-                    available.as_ptr() as isize - first.unwrap() + available.len() as isize,
-                    // &available[0..std::cmp::min(20, available.len())]
-                );
-                sleep(Duration::from_millis(1));
+                // println!(
+                //     "{}: 0x{:0x} {:4}:{:4}",
+                //     // "{}: 0x{:0x} {:4}:{:4} - {:?}",
+                //     name,
+                //     available.as_ptr() as isize,
+                //     available.as_ptr() as isize - first.unwrap(),
+                //     available.as_ptr() as isize - first.unwrap() + available.len() as isize,
+                //     // &available[0..std::cmp::min(20, available.len())]
+                // );
+                // sleep(Duration::from_millis(10));
             }
         }
         println!(
@@ -94,13 +91,14 @@ fn main() {
 
     // Get down to business
 
-    let ch = Arc::new(Channel::new(1 << 12));
+    let ch = Arc::new(Channel::new(1 << 20));
 
     let threads = [
         consumer(ch.receiver(), "R0"),
         consumer(ch.receiver(), "R1"),
-        // consumer(ch.receiver(), "R2"),
-        producer(ch.sender(),   "W0"),
+        consumer(ch.receiver(), "R2"),
+        producer(ch.sender(),   "W0", 17),
+        // producer(ch.sender(),   "W1", 17),
     ];
 
     let ticker = ticker();

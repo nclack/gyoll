@@ -51,9 +51,9 @@ impl Sender {
             }
 
             while collide(&inc.end, ch.min_read_pos()) && ch.is_accepting_writes {
-                println!("     - {} r:{}",inc,ch.min_read_pos());
+                // println!("     - {} r:{}",inc,ch.min_read_pos());
                 self.channel.space_available.wait(&mut ch);
-                println!("exit - {} r:{}",inc,ch.min_read_pos());
+                // println!("exit - {} r:{}",inc,ch.min_read_pos());
             } 
             assert!(inc.beg.cycle-ch.min_read_pos().cycle<3,"inc:{} r:{}",inc,ch.min_read_pos());
 

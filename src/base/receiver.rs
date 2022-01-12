@@ -61,7 +61,7 @@ impl Receiver {
             let w = ch.min_write_pos();
 
             assert!(self.cur <= *w, "w:{} r:{}", w, self.cur);
-            assert!(w.cycle - self.cur.cycle <= 1, "w:{} r:{}", w, self.cur);
+            assert!(w.cycle - self.cur.cycle <= 2, "w:{} r:{}", w, self.cur);
             if self.cur == *w {
                 // The read pos is at the min writer pos.  There is no data
                 // available.
@@ -76,7 +76,7 @@ impl Receiver {
                 assert_ne!(w.offset, self.cur.offset);
                 (self.cur, *w, w.offset - self.cur.offset)
             } else {
-                assert_eq!(self.cur.cycle + 1, w.cycle);
+                assert!(self.cur.cycle<w.cycle);
                 // writer is in the next cycle
 
                 let res=if self.cur.offset == ch.high_mark {
@@ -99,11 +99,11 @@ impl Receiver {
                         },
                         ch.high_mark - self.cur.offset,
                     )
-                };
-                ch.outstanding_reads.remove(&self.cur);
+                };                
                 res
             };
             let ptr = unsafe { ch.ptr.as_ptr().offset(beg.offset) as *const _ };
+            ch.outstanding_reads.remove(&self.cur);
             ch.outstanding_reads.insert(beg);
             (beg, end, ptr, len)
         };
@@ -125,10 +125,10 @@ impl Receiver {
 
         ch.outstanding_reads.remove(beg);
         ch.outstanding_reads.insert(*end);
-        println!(
-            "Release read at {}-{} n: {:?}",
-            beg, end, ch.outstanding_reads
-        );
+        // println!(
+        //     "Release read at {}-{} n: {:?}",
+        //     beg, end, ch.outstanding_reads
+        // );
 
         self.channel.space_available.notify_all();
     }

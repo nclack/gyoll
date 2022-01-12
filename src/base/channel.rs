@@ -1,13 +1,44 @@
 use std::{
     alloc::{self, Layout},
-    collections::HashSet,
+    collections::{HashSet, HashMap, hash_map::Entry},
     ptr::NonNull,
-    sync::Arc,
+    sync::Arc, hash::Hash,
+    fmt::Debug
 };
 
 use parking_lot::{Condvar, RwLock, Mutex};
 
 use super::{cursor::Cursor, receiver::Receiver, sender::Sender};
+
+// FIXME: Counter gets leaked to receiver and is kind of gross. Isn't there 
+//        something better?
+#[derive(Debug)]
+pub(crate) struct Counter<T> {
+    inner: HashMap<T,usize> 
+}
+
+impl<T> Counter<T> 
+    where T: Eq+Hash+Ord+Copy+Debug
+{
+    fn new()->Self { Self{inner:HashMap::new()}}
+    pub(crate) fn insert(&mut self, v:T) {
+        *self.inner.entry(v).or_insert(0)+=1;
+    }
+    pub(crate) fn remove(&mut self, v:&T) {
+        if let Entry::Occupied(mut o) = self.inner.entry(*v) {
+            if *o.get()<=1 {
+                o.remove_entry();
+            } else {
+                *o.get_mut()-=1;
+            }
+        }
+    }
+    fn min(&self)->Option<&T> {
+        self.inner.keys().min()
+    }
+}
+
+
 
 pub(crate) struct RawChannel {
     pub(crate) ptr: NonNull<u8>,
@@ -21,7 +52,7 @@ pub(crate) struct RawChannel {
     pub(crate) head: Cursor,
 
     pub(crate) outstanding_writes: HashSet<Cursor>,
-    pub(crate) outstanding_reads: HashSet<Cursor>,
+    pub(crate) outstanding_reads: Counter<Cursor>,
 }
 
 impl RawChannel {
@@ -41,14 +72,14 @@ impl RawChannel {
             high_mark: 0,
             head: Cursor::zero(),
             outstanding_writes: HashSet::new(),
-            outstanding_reads: HashSet::new(),
+            outstanding_reads: Counter::new(),
         }
     }
 
     pub(crate) fn min_read_pos(&self) -> &Cursor {
         // If there are no active receivers, return the min writer pos
         // (the queue appears initially empty for new receivers)
-        if let Some(c)=self.outstanding_reads.iter().min() {
+        if let Some(c)=self.outstanding_reads.min() {
             c
         } else {
             dbg!(self.min_write_pos())
@@ -109,4 +140,33 @@ impl ChannelFactory for Arc<Channel> {
 pub fn channel(nbytes: usize) -> (Sender, Receiver) {
     let ch = Arc::new(Channel::new(nbytes));
     (ch.sender(),ch.receiver())
+}
+
+#[cfg(test)]
+mod test {
+    use crate::base::channel::Counter;
+
+    #[test]
+    fn counter_insert() {
+        let mut c=Counter::new();
+        c.insert(5);
+        assert_eq!(c.min(),Some(&5));
+    }
+
+    #[test]
+    fn counter_empty_min() {
+        let c:Counter<i32>=Counter::new();
+        assert_eq!(c.min(),None);
+    }
+
+
+    #[test]
+    fn counter_remove() {
+        let mut c=Counter::new();
+        c.remove(&5);
+        c.insert(5);
+        c.insert(6);
+        c.remove(&5);
+        assert_eq!(c.min(),Some(&6));
+    }
 }
