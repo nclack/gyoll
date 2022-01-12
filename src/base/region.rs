@@ -45,6 +45,7 @@ impl<'a> Drop for MutRegion<'a> {
 pub struct Region<'a> {
     pub(crate) owner: &'a mut Receiver,
     pub(crate) beg: Cursor,
+    pub(crate) end: Cursor,
     pub(crate) buf: &'a [u8],
 }
 
@@ -64,6 +65,6 @@ impl<'a> AsRef<[u8]> for Region<'a> {
 
 impl<'a> Drop for Region<'a> {
     fn drop(&mut self) {
-        self.owner.unreserve(&self.beg);
+        self.owner.unreserve(&self.beg,&self.end);
     }
 }

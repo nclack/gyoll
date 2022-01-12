@@ -20,9 +20,6 @@ pub(crate) struct RawChannel {
     /// max of all writers
     pub(crate) head: Cursor,
 
-    /// max of all readers
-    pub(crate) tail: Cursor,
-
     pub(crate) outstanding_writes: HashSet<Cursor>,
     pub(crate) outstanding_reads: HashSet<Cursor>,
 }
@@ -43,14 +40,19 @@ impl RawChannel {
             is_accepting_writes: true,
             high_mark: 0,
             head: Cursor::zero(),
-            tail: Cursor::zero(),
             outstanding_writes: HashSet::new(),
             outstanding_reads: HashSet::new(),
         }
     }
 
     pub(crate) fn min_read_pos(&self) -> &Cursor {
-        self.outstanding_reads.iter().min().unwrap_or(&self.tail)
+        // If there are no active receivers, return the min writer pos
+        // (the queue appears initially empty for new receivers)
+        if let Some(c)=self.outstanding_reads.iter().min() {
+            c
+        } else {
+            dbg!(self.min_write_pos())
+        }
     }
 
     pub(crate) fn min_write_pos(&self) -> &Cursor {

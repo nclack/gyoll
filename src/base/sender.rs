@@ -55,7 +55,7 @@ impl Sender {
                 self.channel.space_available.wait(&mut ch);
                 println!("exit - {} r:{}",inc,ch.min_read_pos());
             } 
-            assert!(inc.beg.cycle-ch.min_read_pos().cycle<2,"inc:{} r:{}",inc,ch.min_read_pos());
+            assert!(inc.beg.cycle-ch.min_read_pos().cycle<3,"inc:{} r:{}",inc,ch.min_read_pos());
 
             if !ch.is_accepting_writes {
                 return None;

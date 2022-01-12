@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     ops::Deref,
     sync::{mpsc::channel, Arc},
 };
@@ -22,15 +23,15 @@ pub struct Receiver {
 unsafe impl Send for Receiver {}
 unsafe impl Sync for Receiver {}
 
-// TODO: disallow overlapping maps. Region must be unmapped first.
-
 impl Receiver {
     pub(crate) fn new(channel: Arc<Channel>) -> Self {
-        let cur=channel.inner.lock().head;
-        Receiver {
-            channel,
-            cur,
-        }
+        let cur = {
+            let mut ch = channel.inner.lock();
+            let cur = *ch.min_write_pos();
+            ch.outstanding_reads.insert(cur);
+            cur
+        };
+        Receiver { channel, cur }
     }
 
     pub fn channel(&self) -> &Arc<Channel> {
@@ -59,9 +60,8 @@ impl Receiver {
 
             let w = ch.min_write_pos();
 
-            assert!(self.cur <= *w,"w:{} r:{}",w,self.cur);
-            assert!(w.cycle - self.cur.cycle <= 1,"w:{} r:{}",w,self.cur);
-
+            assert!(self.cur <= *w, "w:{} r:{}", w, self.cur);
+            assert!(w.cycle - self.cur.cycle <= 1, "w:{} r:{}", w, self.cur);
             if self.cur == *w {
                 // The read pos is at the min writer pos.  There is no data
                 // available.
@@ -78,7 +78,8 @@ impl Receiver {
             } else {
                 assert_eq!(self.cur.cycle + 1, w.cycle);
                 // writer is in the next cycle
-                if self.cur.offset == ch.high_mark {
+
+                let res=if self.cur.offset == ch.high_mark {
                     // already at high, wrap
                     (
                         Cursor {
@@ -98,11 +99,12 @@ impl Receiver {
                         },
                         ch.high_mark - self.cur.offset,
                     )
-                }
+                };
+                ch.outstanding_reads.remove(&self.cur);
+                res
             };
             let ptr = unsafe { ch.ptr.as_ptr().offset(beg.offset) as *const _ };
             ch.outstanding_reads.insert(beg);
-            ch.tail=std::cmp::max(ch.tail,end);
             (beg, end, ptr, len)
         };
         self.cur = end;
@@ -110,6 +112,7 @@ impl Receiver {
             Some(Region {
                 owner: self,
                 beg,
+                end,
                 buf: unsafe { std::slice::from_raw_parts(ptr, len as _) },
             })
         } else {
@@ -117,10 +120,16 @@ impl Receiver {
         }
     }
 
-    pub(crate) fn unreserve(&mut self, beg: &Cursor) {
+    pub(crate) fn unreserve(&mut self, beg: &Cursor, end: &Cursor) {
         let mut ch = self.channel.inner.lock();
-        println!("Release read at {}",beg);
+
         ch.outstanding_reads.remove(beg);
+        ch.outstanding_reads.insert(*end);
+        println!(
+            "Release read at {}-{} n: {:?}",
+            beg, end, ch.outstanding_reads
+        );
+
         self.channel.space_available.notify_all();
     }
 }

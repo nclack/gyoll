@@ -68,16 +68,16 @@ fn main()  {
                     first = Some(available.as_ptr() as isize);
                 }
                 read_bytes += available.len();
-                // println!(
-                //     "0x{:0x} {:4}:{:4}",
-                //     // "0x{:0x} {:4}:{:4} - {:?}",
-                //     available.as_ptr() as isize,
-                //     available.as_ptr() as isize - first.unwrap(),
-                //     available.as_ptr() as isize - first.unwrap() + available.len() as isize,
-                //     // &available[0..std::cmp::min(20, available.len())]
-                // );
+                println!(
+                    "0x{:0x} {:4}:{:4}",
+                    // "0x{:0x} {:4}:{:4} - {:?}",
+                    available.as_ptr() as isize,
+                    available.as_ptr() as isize - first.unwrap(),
+                    available.as_ptr() as isize - first.unwrap() + available.len() as isize,
+                    // &available[0..std::cmp::min(20, available.len())]
+                );
                 // drop(available);
-                // sleep(Duration::from_millis(1));
+                // sleep(Duration::from_millis(10));
             }
         }
         println!("Read - total: {} ({} GB)", read_bytes, (read_bytes as f32)*1e-9);
