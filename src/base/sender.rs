@@ -41,21 +41,33 @@ impl Sender {
 
             let inc = ch.head.next_region(nbytes, ch.capacity);
 
-            fn collide(w: &Cursor, r: &Cursor) -> bool {
+            // Reserve the region even though we haven't fully acquired it yet.
+            ch.outstanding_writes.insert(inc.beg);
+            if let Some(high_mark) = inc.high_mark {
+                ch.high_mark = high_mark;
+            }
+            let prev_head = ch.head;
+            ch.head = inc.end;
 
+            fn collide(w: &Cursor, r: &Cursor) -> bool {
                 // On the same cycle, there can be no collision bc enforce r<=w elsewhere.
                 // Otherwise,
-                w.cycle > r.cycle && (w.offset > r.offset || w.cycle>r.cycle+1)
+                w.cycle > r.cycle && (w.offset > r.offset || w.cycle > r.cycle + 1)
                 // The w.cycle>r.cycle+1 case handles when the first unread
                 // byte is hanging off the end of the cycle.
             }
 
             while collide(&inc.end, ch.min_read_pos()) && ch.is_accepting_writes {
-                // println!("     - {} r:{}",inc,ch.min_read_pos());
+                println!("     - {} r:{}", inc, ch.min_read_pos());
                 self.channel.space_available.wait(&mut ch);
-                // println!("exit - {} r:{}",inc,ch.min_read_pos());
-            } 
-            assert!(inc.beg.cycle-ch.min_read_pos().cycle<3,"inc:{} r:{}",inc,ch.min_read_pos());
+                println!("exit - {} r:{}", inc, ch.min_read_pos());
+            }
+            assert!(
+                inc.beg.cycle - ch.min_read_pos().cycle < 3,
+                "inc:{} r:{}",
+                inc,
+                ch.min_read_pos()
+            );
 
             if !ch.is_accepting_writes {
                 return None;
@@ -64,11 +76,6 @@ impl Sender {
             // At this point there's space available so we're ready to reserve
             // the region.
 
-            ch.outstanding_writes.insert(inc.beg);
-            ch.head = inc.end;
-            if let Some(high_mark) = inc.high_mark {
-                ch.high_mark = high_mark;
-            }
             let ptr = unsafe { ch.ptr.as_ptr().offset(inc.beg.offset) };
             (inc.beg, ptr)
         };
@@ -83,7 +90,7 @@ impl Sender {
     }
 
     pub(crate) fn unreserve(&self, beg: &Cursor) {
-        let mut ch=self.channel.inner.lock();
+        let mut ch = self.channel.inner.lock();
         ch.outstanding_writes.remove(beg);
     }
 }

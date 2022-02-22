@@ -76,10 +76,10 @@ impl Receiver {
                 assert_ne!(w.offset, self.cur.offset);
                 (self.cur, *w, w.offset - self.cur.offset)
             } else {
-                assert!(self.cur.cycle<w.cycle);
+                assert!(self.cur.cycle < w.cycle);
                 // writer is in the next cycle
 
-                let res=if self.cur.offset == ch.high_mark {
+                let res = if self.cur.offset == ch.high_mark {
                     // already at high, wrap
                     (
                         Cursor {
@@ -99,7 +99,7 @@ impl Receiver {
                         },
                         ch.high_mark - self.cur.offset,
                     )
-                };                
+                };
                 res
             };
             let ptr = unsafe { ch.ptr.as_ptr().offset(beg.offset) as *const _ };

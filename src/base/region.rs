@@ -65,6 +65,6 @@ impl<'a> AsRef<[u8]> for Region<'a> {
 
 impl<'a> Drop for Region<'a> {
     fn drop(&mut self) {
-        self.owner.unreserve(&self.beg,&self.end);
+        self.owner.unreserve(&self.beg, &self.end);
     }
 }

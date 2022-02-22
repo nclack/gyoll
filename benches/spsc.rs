@@ -23,7 +23,7 @@ criterion_main!(benches);
 
 macro_rules! debug {
     // ($($e:expr),*) => {println!( $($e),* )}
-    ($($e:expr),*) => {}
+    ($($e:expr),*) => {};
 }
 
 struct Env {
