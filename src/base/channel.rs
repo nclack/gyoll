@@ -53,7 +53,9 @@ pub(crate) struct RawChannel {
     pub(crate) high_mark: isize,
 
     /// max of all writers
-    pub(crate) head: Cursor,
+    pub(crate) write_head: Cursor,
+    /// max of all written regions
+    pub(crate) read_head: Cursor,
 
     pub(crate) outstanding_writes: HashSet<Cursor>,
     pub(crate) outstanding_reads: Counter<Cursor>,
@@ -74,7 +76,8 @@ impl RawChannel {
             capacity: nbytes,
             is_accepting_writes: true,
             high_mark: 0,
-            head: Cursor::zero(),
+            write_head: Cursor::zero(),
+            read_head: Cursor::zero(),
             outstanding_writes: HashSet::new(),
             outstanding_reads: Counter::new(),
         }
@@ -86,12 +89,12 @@ impl RawChannel {
         if let Some(c) = self.outstanding_reads.min() {
             c
         } else {
-            dbg!(self.min_write_pos())
+            dbg!(self.read_head())
         }
     }
 
-    pub(crate) fn min_write_pos(&self) -> &Cursor {
-        self.outstanding_writes.iter().min().unwrap_or(&self.head)
+    pub(crate) fn read_head(&self) -> &Cursor {
+        self.outstanding_writes.iter().min().unwrap_or(&self.read_head)
     }
 }
 

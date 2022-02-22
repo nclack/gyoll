@@ -27,7 +27,7 @@ impl Receiver {
     pub(crate) fn new(channel: Arc<Channel>) -> Self {
         let cur = {
             let mut ch = channel.inner.lock();
-            let cur = *ch.min_write_pos();
+            let cur = *ch.read_head();
             ch.outstanding_reads.insert(cur);
             cur
         };
@@ -40,7 +40,7 @@ impl Receiver {
 
     pub fn is_open(&self) -> bool {
         let ch = self.channel.inner.lock();
-        ch.is_accepting_writes || self.cur != ch.head
+        ch.is_accepting_writes || self.cur != ch.read_head
     }
 
     pub fn next(&mut self) -> Option<Region> {
@@ -58,7 +58,7 @@ impl Receiver {
         let (beg, end, ptr, len) = {
             let mut ch = self.channel.inner.lock();
 
-            let w = ch.min_write_pos();
+            let w = ch.read_head();
 
             assert!(self.cur <= *w, "w:{} r:{}", w, self.cur);
             assert!(w.cycle - self.cur.cycle <= 2, "w:{} r:{}", w, self.cur);

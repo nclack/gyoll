@@ -39,15 +39,15 @@ impl Sender {
                 return None;
             }
 
-            let inc = ch.head.next_region(nbytes, ch.capacity);
+            let inc = ch.write_head.next_region(nbytes, ch.capacity);
 
             // Reserve the region even though we haven't fully acquired it yet.
             ch.outstanding_writes.insert(inc.beg);
             if let Some(high_mark) = inc.high_mark {
                 ch.high_mark = high_mark;
             }
-            let prev_head = ch.head;
-            ch.head = inc.end;
+            let prev_head = ch.write_head;
+            ch.write_head = inc.end;
 
             fn collide(w: &Cursor, r: &Cursor) -> bool {
                 // On the same cycle, there can be no collision bc enforce r<=w elsewhere.
@@ -70,11 +70,13 @@ impl Sender {
             );
 
             if !ch.is_accepting_writes {
+                ch.outstanding_writes.remove(&inc.beg);
                 return None;
             }
 
             // At this point there's space available so we're ready to reserve
             // the region.
+            ch.read_head=ch.read_head.max(inc.end);
 
             let ptr = unsafe { ch.ptr.as_ptr().offset(inc.beg.offset) };
             (inc.beg, ptr)
@@ -119,7 +121,7 @@ mod test {
         {
             let c=tx.channel.inner.lock();
             assert_eq!(c.high_mark,10);
-            assert_eq!(c.head,Cursor{ cycle: 1, offset: 5 });
+            assert_eq!(c.write_head,Cursor{ cycle: 1, offset: 5 });
         }
     }
 }

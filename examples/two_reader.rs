@@ -117,7 +117,7 @@ fn main() {
         consumer(ch.receiver(), "R1"),
         consumer(ch.receiver(), "R2"),
         producer(ch.sender(), "W0", 1 << 12),
-        producer(ch.sender(), "W1", 17),
+        // producer(ch.sender(), "W1", 17),
     ];
 
     let ticker = ticker();
