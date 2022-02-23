@@ -3,9 +3,11 @@ use std::{mem::size_of_val, sync::Arc};
 use parking_lot::lock_api::RawRwLockUpgrade;
 use parking_lot::{RwLock, RwLockUpgradableReadGuard};
 
+use crate::base::cursor::EndCursor;
+
 use super::{
     channel::{Channel, RawChannel},
-    cursor::Cursor,
+    cursor::BegCursor,
     region::MutRegion,
 };
 
@@ -39,17 +41,16 @@ impl Sender {
                 return None;
             }
 
-            let inc = ch.write_head.next_region(nbytes, ch.capacity);
+            let (inc, wrapped) = ch.write_head.next_region(nbytes, ch.capacity);
 
             // Reserve the region even though we haven't fully acquired it yet.
             ch.outstanding_writes.insert(inc.beg);
-            if let Some(high_mark) = inc.high_mark {
-                ch.high_mark = high_mark;
+            if wrapped {
+                ch.high_mark = inc.end.wrap;
             }
-            let prev_head = ch.write_head;
             ch.write_head = inc.end;
 
-            fn collide(w: &Cursor, r: &Cursor) -> bool {
+            fn collide(w: &EndCursor, r: &BegCursor) -> bool {
                 // On the same cycle, there can be no collision bc enforce r<=w elsewhere.
                 // Otherwise,
                 w.cycle > r.cycle && (w.offset > r.offset || w.cycle > r.cycle + 1)
@@ -57,7 +58,7 @@ impl Sender {
                 // byte is hanging off the end of the cycle.
             }
 
-            while collide(&inc.end, ch.min_read_pos()) && ch.is_accepting_writes {
+            while collide(&inc.end, &ch.min_read_pos()) && ch.is_accepting_writes {
                 println!("     - {} r:{}", inc, ch.min_read_pos());
                 self.channel.space_available.wait(&mut ch);
                 println!("exit - {} r:{}", inc, ch.min_read_pos());
@@ -70,13 +71,14 @@ impl Sender {
             );
 
             if !ch.is_accepting_writes {
+                // don't need to fix the write head bc we won't be doing more writes
                 ch.outstanding_writes.remove(&inc.beg);
                 return None;
             }
 
             // At this point there's space available so we're ready to reserve
             // the region.
-            ch.read_head=ch.read_head.max(inc.end);
+            ch.read_head = ch.read_head.max(inc.end);
 
             let ptr = unsafe { ch.ptr.as_ptr().offset(inc.beg.offset) };
             (inc.beg, ptr)
@@ -91,7 +93,7 @@ impl Sender {
         })
     }
 
-    pub(crate) fn unreserve(&self, beg: &Cursor) {
+    pub(crate) fn unreserve(&self, beg: &BegCursor) {
         let mut ch = self.channel.inner.lock();
         ch.outstanding_writes.remove(beg);
     }
@@ -99,7 +101,11 @@ impl Sender {
 
 #[cfg(test)]
 mod test {
-    use crate::base::{channel, cursor::Cursor, region::MutRegion};
+    use crate::base::{
+        channel,
+        cursor::{BegCursor, EndCursor},
+        region::MutRegion,
+    };
 
     #[test]
     #[rustfmt::skip]
@@ -107,21 +113,21 @@ mod test {
         let (mut tx,mut rx)=channel(13);
         {
             let reg = tx.map(5).unwrap();
-            assert_eq!(reg.cur,Cursor { cycle: 0, offset: 0 });
+            assert_eq!(reg.cur,BegCursor { cycle: 0, offset: 0 });
         }
         {
             let reg = tx.map(5).unwrap();
-            assert_eq!(reg.cur,Cursor { cycle: 0, offset: 5 });
+            assert_eq!(reg.cur,BegCursor { cycle: 0, offset: 5 });
         }
         while rx.next().is_some() {}; // drain so we can continue
         {
             let reg = tx.map(5).unwrap();
-            assert_eq!(reg.cur,Cursor { cycle: 1, offset: 0 });
+            assert_eq!(reg.cur,BegCursor { cycle: 1, offset: 0 });
         }
         {
             let c=tx.channel.inner.lock();
             assert_eq!(c.high_mark,10);
-            assert_eq!(c.write_head,Cursor{ cycle: 1, offset: 5 });
+            assert_eq!(c.write_head,EndCursor{cycle:1,offset:5, wrap: 10 });
         }
     }
 }

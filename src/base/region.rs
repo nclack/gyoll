@@ -1,6 +1,6 @@
 use std::ops::{Deref, DerefMut};
 
-use super::{cursor::Cursor, receiver::Receiver, sender::Sender};
+use super::{cursor::{BegCursor, EndCursor}, receiver::Receiver, sender::Sender};
 
 //
 //  MutRegion
@@ -8,7 +8,7 @@ use super::{cursor::Cursor, receiver::Receiver, sender::Sender};
 
 pub struct MutRegion<'a> {
     pub(crate) owner: &'a mut Sender,
-    pub(crate) cur: Cursor,
+    pub(crate) cur: BegCursor,
     pub(crate) buf: &'a mut [u8],
 }
 
@@ -44,8 +44,8 @@ impl<'a> Drop for MutRegion<'a> {
 
 pub struct Region<'a> {
     pub(crate) owner: &'a mut Receiver,
-    pub(crate) beg: Cursor,
-    pub(crate) end: Cursor,
+    pub(crate) beg: BegCursor,
+    pub(crate) end: EndCursor,
     pub(crate) buf: &'a [u8],
 }
 

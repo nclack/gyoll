@@ -9,7 +9,11 @@ use std::{
 
 use parking_lot::{Condvar, Mutex, RwLock};
 
-use super::{cursor::Cursor, receiver::Receiver, sender::Sender};
+use super::{
+    cursor::{BegCursor, EndCursor},
+    receiver::Receiver,
+    sender::Sender,
+};
 
 // FIXME: Counter gets leaked to receiver and is kind of gross. Isn't there
 //        something better?
@@ -53,12 +57,12 @@ pub(crate) struct RawChannel {
     pub(crate) high_mark: isize,
 
     /// max of all writers
-    pub(crate) write_head: Cursor,
+    pub(crate) write_head: EndCursor,
     /// max of all written regions
-    pub(crate) read_head: Cursor,
+    pub(crate) read_head: EndCursor,
 
-    pub(crate) outstanding_writes: HashSet<Cursor>,
-    pub(crate) outstanding_reads: Counter<Cursor>,
+    pub(crate) outstanding_writes: HashSet<BegCursor>,
+    pub(crate) outstanding_reads: Counter<BegCursor>,
 }
 
 impl RawChannel {
@@ -76,25 +80,37 @@ impl RawChannel {
             capacity: nbytes,
             is_accepting_writes: true,
             high_mark: 0,
-            write_head: Cursor::zero(),
-            read_head: Cursor::zero(),
+            write_head: EndCursor {
+                wrap: nbytes as isize,
+                ..Default::default()
+            },
+            read_head: EndCursor{
+                wrap: nbytes as isize,
+                ..Default::default()
+            },
             outstanding_writes: HashSet::new(),
             outstanding_reads: Counter::new(),
         }
     }
 
-    pub(crate) fn min_read_pos(&self) -> &Cursor {
+    pub(crate) fn min_read_pos(&self) -> BegCursor {
         // If there are no active receivers, return the min writer pos
         // (the queue appears initially empty for new receivers)
-        if let Some(c) = self.outstanding_reads.min() {
+        if let Some(&c) = self.outstanding_reads.min() {
             c
         } else {
-            dbg!(self.read_head())
+            dbg!(self.read_head().to_beg())
         }
     }
 
-    pub(crate) fn read_head(&self) -> &Cursor {
-        self.outstanding_writes.iter().min().unwrap_or(&self.read_head)
+    // First unread byte
+    pub(crate) fn read_head(&self) -> EndCursor {
+        let wrap=self.read_head.wrap;
+        self.outstanding_writes
+            .iter()
+            .min()
+            .map(|e| e.to_end(wrap))
+            .unwrap_or(self.read_head)
     }
 }
 
@@ -156,7 +172,7 @@ pub fn channel(nbytes: usize) -> (Sender, Receiver) {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use crate::base::channel::Counter;
 
     #[test]
