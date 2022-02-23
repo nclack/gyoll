@@ -19,7 +19,7 @@ pub struct Receiver {
 
     /// The read position
     /// This is often the beginning of the next read region.
-    cur: BegCursor,
+    cur: EndCursor,
 }
 
 unsafe impl Send for Receiver {}
@@ -29,8 +29,8 @@ impl Receiver {
     pub(crate) fn new(channel: Arc<Channel>) -> Self {
         let cur = {
             let mut ch = channel.inner.lock();
-            let cur = ch.read_head().to_beg();
-            ch.outstanding_reads.insert(cur);
+            let cur = ch.read_head();
+            ch.outstanding_reads.insert(cur.to_beg());
             cur
         };
         Receiver { channel, cur }
@@ -42,7 +42,7 @@ impl Receiver {
 
     pub fn is_open(&self) -> bool {
         let ch = self.channel.inner.lock();
-        ch.is_accepting_writes || self.cur.to_end(ch.high_mark) != ch.read_head
+        ch.is_accepting_writes || self.cur != ch.read_head
     }
 
     pub fn next(&mut self) -> Option<Region> {
@@ -62,9 +62,9 @@ impl Receiver {
 
             let w = ch.read_head();
 
-            assert!(self.cur <= w.to_beg(), "w:{} r:{}", w, self.cur);
+            assert!(self.cur <= w, "w:{} r:{}", w, self.cur);
             assert!(w.cycle - self.cur.cycle <= 2, "w:{} r:{}", w, self.cur);
-            if self.cur == w.to_beg() {
+            if self.cur == w {
                 // The read pos is at the min writer pos.  There is no data
                 // available.
 
@@ -76,7 +76,7 @@ impl Receiver {
             let (beg, end, len)= if self.cur.cycle == w.cycle {
                 // same cycle case
                 assert_ne!(w.offset, self.cur.offset);
-                (self.cur, w, w.offset - self.cur.offset)
+                (self.cur.to_beg(), w, w.offset - self.cur.offset)
             } else {
                 assert!(self.cur.cycle < w.cycle);
                 // writer is in the next cycle
@@ -94,7 +94,7 @@ impl Receiver {
                 } else {
                     // take remainder on this cycle
                     (
-                        self.cur,
+                        self.cur.to_beg(),
                         EndCursor {
                             cycle: self.cur.cycle,
                             offset: ch.high_mark,
@@ -106,11 +106,11 @@ impl Receiver {
                 res
             };
             let ptr = unsafe { ch.ptr.as_ptr().offset(beg.offset) as *const _ };
-            ch.outstanding_reads.remove(&self.cur);
+            ch.outstanding_reads.remove(&self.cur.to_beg());
             ch.outstanding_reads.insert(beg);
             (beg, end, ptr, len)
         };
-        self.cur = end.to_beg();
+        self.cur = end;
         if len > 0 {
             Some(Region {
                 owner: self,

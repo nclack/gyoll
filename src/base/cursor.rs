@@ -6,7 +6,7 @@ pub(crate) struct BegCursor {
     pub(crate) offset: isize,
 }
 
-#[derive(Default, Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
+#[derive(Default, Debug,  Clone, Copy, Hash)]
 pub(crate) struct EndCursor {
     pub(crate) cycle: isize,
     pub(crate) offset: isize,
@@ -81,7 +81,30 @@ impl EndCursor {
             (Increment { beg: self.to_beg(), end }, false)
         }
     }
+}
 
+impl PartialEq for EndCursor {
+    fn eq(&self, other: &Self) -> bool {
+        self.cycle == other.cycle && self.offset == other.offset
+    }
+}
+
+impl Eq for EndCursor {}
+
+impl PartialOrd for EndCursor {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        match self.cycle.partial_cmp(&other.cycle) {
+            Some(core::cmp::Ordering::Equal) => {}
+            ord => return ord,
+        }
+        self.offset.partial_cmp(&other.offset)
+    }
+}
+
+impl Ord for EndCursor {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.partial_cmp(other).unwrap()
+    }
 }
 
 impl Display for BegCursor {

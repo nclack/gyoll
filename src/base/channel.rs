@@ -81,12 +81,14 @@ impl RawChannel {
             is_accepting_writes: true,
             high_mark: 0,
             write_head: EndCursor {
+                cycle:-1,
+                offset:nbytes as isize,
                 wrap: nbytes as isize,
-                ..Default::default()
             },
             read_head: EndCursor{
+                cycle:-1,
+                offset:nbytes as isize,
                 wrap: nbytes as isize,
-                ..Default::default()
             },
             outstanding_writes: HashSet::new(),
             outstanding_reads: Counter::new(),

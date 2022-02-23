@@ -8,9 +8,11 @@ use std::{
 };
 
 use gyoll::base::channel;
+use log::{info, debug};
 use parking_lot::Mutex;
 
 fn main() {
+    pretty_env_logger::init();
     // Install a custom panic handler so the process exits if there's a
     // panic in a thread.
 
@@ -29,7 +31,7 @@ fn main() {
         let running = ticker_running.clone();
         let ticker = spawn(move || {
             while *running.lock() {
-                println!("tick");
+                info!("tick");
                 sleep(Duration::from_millis(200));
             }
         });
@@ -37,7 +39,7 @@ fn main() {
 
     let producer = spawn(move || {
         // NOTE: name - map() - alternatives get,request,
-        println!("Entering Writer");
+        info!("Entering Writer");
         let mut written_bytes = 0;
         // FIXME: There's some problem when the chunksize is >= (N/2)+1 - won't proceed
         while let Some(mut buf) = tx.map(17) {
@@ -48,15 +50,14 @@ fn main() {
                 *k = v as u8;
             }
             written_bytes += buf.len();
-            // println!("Write - total: {}",written_bytes);
             // sleep(Duration::from_millis(1));
         }
-        println!("Write - total: {}", written_bytes);
-        println!("Exiting Writer");
+        info!("Write - total: {}", written_bytes);
+        info!("Exiting Writer");
     });
 
     let consumer = spawn(move || {
-        println!("Entering Reader");
+        info!("Entering Reader");
         let mut read_bytes = 0;
         // TODO: what are the shutdown/disconnect rules?
         let first = rx.channel().as_ptr() as isize;
@@ -65,7 +66,7 @@ fn main() {
             while let Some(available) = rx.next() {
                 // rx.next(); // <-- doesn't work bc rx is mut
                 read_bytes += available.len();
-                println!(
+                debug!(
                     "0x{:0x} {:4}:{:4}",
                     // "0x{:0x} {:4}:{:4} - {:?}",
                     available.as_ptr() as isize,
@@ -77,17 +78,17 @@ fn main() {
                 // sleep(Duration::from_millis(10));
             }
         }
-        println!(
+        info!(
             "Read - total: {} ({} GB)",
             read_bytes,
             (read_bytes as f32) * 1e-9
         );
-        println!("Exiting Reader");
+        info!("Exiting Reader");
     });
 
     sleep(Duration::from_secs(1));
     ch.close();
-    println!("STOP");
+    info!("STOP");
     *ticker_running.lock() = false;
 
     producer.join().expect("Producer failed");

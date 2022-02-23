@@ -1,5 +1,6 @@
 use std::{mem::size_of_val, sync::Arc};
 
+use log::trace;
 use parking_lot::lock_api::RawRwLockUpgrade;
 use parking_lot::{RwLock, RwLockUpgradableReadGuard};
 
@@ -59,9 +60,9 @@ impl Sender {
             }
 
             while collide(&inc.end, &ch.min_read_pos()) && ch.is_accepting_writes {
-                println!("     - {} r:{}", inc, ch.min_read_pos());
+                trace!("     - {} r:{}", inc, ch.min_read_pos());
                 self.channel.space_available.wait(&mut ch);
-                println!("exit - {} r:{}", inc, ch.min_read_pos());
+                trace!("exit - {} r:{}", inc, ch.min_read_pos());
             }
             assert!(
                 inc.beg.cycle - ch.min_read_pos().cycle < 3,

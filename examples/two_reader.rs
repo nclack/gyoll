@@ -9,6 +9,7 @@ use std::{
 };
 
 use gyoll::base::{Channel, ChannelFactory, Receiver, Sender};
+use log::{debug, info};
 
 struct Ticker {
     _thread: JoinHandle<()>,
@@ -21,7 +22,7 @@ fn ticker() -> Ticker {
         running: running.clone(),
         _thread: spawn(move || {
             while running.load(Ordering::Relaxed) {
-                println!("tick");
+                debug!("tick");
                 sleep(Duration::from_millis(200));
             }
         }),
@@ -33,12 +34,12 @@ fn producer(tx: Sender, name: &'static str, payload_size: usize) -> (JoinHandle<
     let th = thread::Builder::new()
         .name(name.into())
         .spawn(move || {
-            println!("{}: Entering Writer", name);
+            info!("{}: Entering Writer", name);
             let mut written_bytes = 0;
             let first = tx.channel().as_ptr() as isize;
             while let Some(buf) = tx.map(payload_size) {
                 written_bytes += buf.len();
-                println!(
+                debug!(
                     "{}: 0x{:0x} {:4}:{:4}",
                     name,
                     buf.as_ptr() as isize,
@@ -47,13 +48,13 @@ fn producer(tx: Sender, name: &'static str, payload_size: usize) -> (JoinHandle<
                 );
                 // sleep(Duration::from_millis(10));
             }
-            println!(
+            info!(
                 "{}: Write - total: {} bytes. {} ops",
                 name,
                 written_bytes,
                 written_bytes / payload_size
             );
-            println!("{}: Exiting Writer", name);
+            info!("{}: Exiting Writer", name);
         })
         .unwrap();
     (th, name)
@@ -64,7 +65,7 @@ fn consumer(rx: Receiver, name: &'static str) -> (JoinHandle<()>, &str) {
     let th = thread::Builder::new()
         .name(name.into())
         .spawn(move || {
-            println!("{}: Entering Reader", name);
+            info!("{}: Entering Reader", name);
             let mut read_bytes = 0;
             let mut first = None;
             while rx.is_open() {
@@ -73,7 +74,7 @@ fn consumer(rx: Receiver, name: &'static str) -> (JoinHandle<()>, &str) {
                         first = Some(available.as_ptr() as isize);
                     }
                     read_bytes += available.len();
-                    println!(
+                    debug!(
                         "{}: 0x{:0x} {:4}:{:4}",
                         // "{}: 0x{:0x} {:4}:{:4} - {:?}",
                         name,
@@ -85,19 +86,20 @@ fn consumer(rx: Receiver, name: &'static str) -> (JoinHandle<()>, &str) {
                     // sleep(Duration::from_millis(10));
                 }
             }
-            println!(
+            info!(
                 "{}: Read - total: {} ({} GB)",
                 name,
                 read_bytes,
                 (read_bytes as f32) * 1e-9
             );
-            println!("{}: Exiting Reader", name);
+            info!("{}: Exiting Reader", name);
         })
         .unwrap();
     (th, name)
 }
 
 fn main() {
+    pretty_env_logger::init();
     // Install a custom panic handler so the process exits if there's a
     // panic in a thread.
 
@@ -117,13 +119,13 @@ fn main() {
         consumer(ch.receiver(), "R1"),
         consumer(ch.receiver(), "R2"),
         producer(ch.sender(), "W0", 1 << 12),
-        // producer(ch.sender(), "W1", 17),
+        producer(ch.sender(), "W1", 17),
     ];
 
     let ticker = ticker();
     sleep(Duration::from_secs(1));
     ch.close();
-    println!("Stop");
+    info!("Stop");
     ticker.running.store(false, Ordering::SeqCst);
 
     for (t, name) in threads {
