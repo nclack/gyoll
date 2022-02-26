@@ -55,13 +55,12 @@ impl Receiver {
         let (cur, ptr, len) = {
             let mut ch = self.channel.inner.lock();
 
-            
             let w = ch.write_tail;
             let end = ch.read_head;
 
             assert!(self.cur <= w, "w:{} r:{}", w, self.cur);
             assert!(w.cycle - self.cur.cycle <= 2, "w:{} r:{}", w, self.cur);
-            if self.cur == w {
+            if self.cur.is_empty(&end) {
                 // The read pos is at the min writer pos.  There is no data
                 // available.
 
@@ -72,18 +71,18 @@ impl Receiver {
 
             let (cur, len): (Interval, isize) = if self.cur.cycle == end.cycle {
                 // same cycle case
-                assert_ne!(w.offset, self.cur.offset);
+                assert_ne!(end.offset, self.cur.offset);
                 (
                     Interval {
                         beg: self.cur,
                         end,
                         high_mark: None,
                     },
-                    w.offset - self.cur.offset,
+                    end.offset - self.cur.offset,
                 )
             } else {
-                assert!(self.cur.cycle < end.cycle);
-                let high_mark=ch.high_mark.unwrap();
+                assert!(self.cur.cycle < w.cycle);
+                let high_mark = ch.high_mark.unwrap();
                 // read_head is in the next cycle
                 if self.cur.offset == high_mark {
                     // already at high, wrap
@@ -94,9 +93,9 @@ impl Receiver {
                                 offset: 0,
                             },
                             end,
-                            high_mark: ch.high_mark 
+                            high_mark: ch.high_mark,
                         },
-                        w.offset,
+                        end.offset,
                     )
                 } else {
                     // take remainder on this cycle
@@ -130,8 +129,8 @@ impl Receiver {
     }
 
     pub(crate) fn unreserve(&mut self, interval: &Interval) {
-        // Remove the region and update the read_tail. If this is the last 
-        // region outstanding then the read_tail corresponds to the end, 
+        // Remove the region and update the read_tail. If this is the last
+        // region outstanding then the read_tail corresponds to the end,
         // otherwise it's just the min over all outstanding reads.
         let mut ch = self.channel.inner.lock();
         ch.outstanding_reads.remove(&interval.beg);
@@ -139,9 +138,6 @@ impl Receiver {
             .outstanding_reads
             .min()
             .unwrap_or(&interval.end.to_beg(interval.high_mark));
-        if ch.read_tail.cycle==ch.read_head.cycle {
-            ch.high_mark=None;
-        }
         self.channel.space_available.notify_all();
     }
 }

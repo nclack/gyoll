@@ -58,6 +58,10 @@ impl BegCursor {
         Self::default()
     }
 
+    pub(crate) fn is_empty(&self, other: &EndCursor) -> bool {
+        (other.cycle < self.cycle) || (self.offset == other.offset && self.cycle == other.cycle)
+    }
+
     pub(crate) fn to_end(&self, high_mark: Option<isize>) -> EndCursor {
         // TODO: change arg to take an interval. Needs to be the interval the high_mark was pulled from
         let (offset, cycle) = if let Some(high_mark) = high_mark {

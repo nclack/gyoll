@@ -22,7 +22,11 @@ pub(crate) struct RawChannel {
 
     /// when closing the channel, we stop accepting writes
     pub(crate) is_accepting_writes: bool,
-    pub(crate) high_mark: Option<isize>, 
+
+    // This is an offset that behaves like an EndCursor.
+    // It is relevant for the read side.
+    pub(crate) tmp_high_mark: Option<isize>,
+    pub(crate) high_mark: Option<isize>,
 
     /// End of regions claimed for write
     pub(crate) write_tail: BegCursor,
@@ -56,6 +60,7 @@ impl RawChannel {
             ptr,
             capacity: nbytes,
             is_accepting_writes: true,
+            tmp_high_mark: None,
             high_mark: None,
             write_head: EndCursor::zero(),
             write_tail: BegCursor::zero(),

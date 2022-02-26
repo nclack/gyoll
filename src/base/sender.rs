@@ -1,6 +1,6 @@
 use std::{mem::size_of_val, sync::Arc};
 
-use log::trace;
+use log::{info, trace};
 use parking_lot::lock_api::RawRwLockUpgrade;
 use parking_lot::{RwLock, RwLockUpgradableReadGuard};
 
@@ -52,7 +52,7 @@ impl Sender {
             // are none, we need to update the write_tail. This will assist
             // with wrapping around a cycle sometimes.
             if ch.outstanding_writes.is_empty() {
-                ch.write_tail=inc.beg;
+                ch.write_tail = inc.beg;
             }
             ch.write_head = inc.end;
             ch.outstanding_writes.insert(inc);
@@ -141,17 +141,23 @@ impl Sender {
         ch.write_tail = mn
             .map(|e| e.beg)
             .unwrap_or(interval.end.to_beg(interval.high_mark));
+
         // read_head should default to write_tail when there are no
         // outstanding_writes. But write_tail defaults to interval.end in that
         // case. Take that shortcut below to avoid switching the sense of the
         // endpoint.
+        let c0=ch.read_head.cycle;
         ch.read_head = mn
             .map(|e| e.beg.to_end(e.high_mark))
             .unwrap_or(interval.end);
+        let c1=ch.read_head.cycle;
 
-        // update high mark when read_head crosses a cycle boundary
-        if ch.read_head.cycle > ch.read_tail.cycle && interval.high_mark.is_some() {
-            ch.high_mark = interval.high_mark;
+        // update high mark for when read_head crosses a cycle boundary
+        if interval.high_mark.is_some() {
+            ch.tmp_high_mark = interval.high_mark;
+        } 
+        if c1>c0 {
+            ch.high_mark=ch.tmp_high_mark;
         }
     }
 }
