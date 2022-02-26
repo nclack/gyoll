@@ -58,7 +58,7 @@ impl Receiver {
             let w = ch.write_tail;
             let end = ch.read_head;
 
-            assert!(self.cur <= w, "w:{} r:{}", w, self.cur);
+            assert!(self.cur <= w, "read cur:{} - write_tail:{} read_head:{}", self.cur,w,end);
             assert!(w.cycle - self.cur.cycle <= 2, "w:{} r:{}", w, self.cur);
             if self.cur.is_empty(&end) {
                 // The read pos is at the min writer pos.  There is no data
@@ -113,6 +113,7 @@ impl Receiver {
                 }
             };
             let ptr = unsafe { ch.ptr.as_ptr().offset(cur.beg.offset) as *const _ };
+            ch.outstanding_reads.remove(&self.cur);
             ch.outstanding_reads.insert(cur.beg);
             (cur, ptr, len)
         };
@@ -134,6 +135,7 @@ impl Receiver {
         // otherwise it's just the min over all outstanding reads.
         let mut ch = self.channel.inner.lock();
         ch.outstanding_reads.remove(&interval.beg);
+        ch.outstanding_reads.insert(self.cur);
         ch.read_tail = *ch
             .outstanding_reads
             .min()
