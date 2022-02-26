@@ -8,7 +8,7 @@ use std::{
 };
 
 use gyoll::base::channel;
-use log::{info, debug};
+use log::{debug, info};
 use parking_lot::Mutex;
 
 fn main() {

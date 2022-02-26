@@ -6,22 +6,41 @@ pub(crate) struct BegCursor {
     pub(crate) offset: isize,
 }
 
-#[derive(Default, Debug,  Clone, Copy, Hash)]
+#[derive(Default, Debug, Clone, Copy, Hash)]
 pub(crate) struct EndCursor {
     pub(crate) cycle: isize,
     pub(crate) offset: isize,
-    pub(crate) wrap: isize,
 }
 
-pub(crate) struct Increment {
+#[derive(Hash, Clone, Copy, Eq, PartialEq, Debug)]
+pub(crate) struct Interval {
     /// The beginning of the region.
     pub(crate) beg: BegCursor,
 
     /// The end of the region.
     pub(crate) end: EndCursor,
+
+    /// If set, the buffer wrapped around and this was the high water mark.
+    pub(crate) high_mark: Option<isize>,
 }
 
-impl Display for Increment {
+impl PartialOrd for Interval {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        match self.beg.partial_cmp(&other.beg) {
+            Some(core::cmp::Ordering::Equal) => {}
+            ord => return ord,
+        }
+        self.end.partial_cmp(&other.end)
+    }
+}
+
+impl Ord for Interval {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.partial_cmp(other).unwrap()
+    }
+}
+
+impl Display for Interval {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -29,7 +48,7 @@ impl Display for Increment {
             cycle = self.beg.cycle,
             beg = self.beg.offset,
             end = self.end.offset,
-            high = self.end.wrap
+            high = if let Some(h) = self.high_mark { h } else { -1 }
         )
     }
 }
@@ -39,46 +58,74 @@ impl BegCursor {
         Self::default()
     }
 
-    pub(crate) fn to_end(self,wrap:isize)->EndCursor {
-        if self.offset==0 {
-            EndCursor{ cycle: self.cycle-1, offset:wrap, wrap:wrap}
+    pub(crate) fn to_end(&self, high_mark: Option<isize>) -> EndCursor {
+        // TODO: change arg to take an interval. Needs to be the interval the high_mark was pulled from
+        let (offset, cycle) = if let Some(high_mark) = high_mark {
+            assert_eq!(self.offset, 0);
+            (high_mark, self.cycle - 1)
         } else {
-            EndCursor { cycle: self.cycle, offset: self.offset, wrap: wrap }
-        }
+            (self.offset, self.cycle)
+        };
+        EndCursor { offset, cycle }
     }
-
 }
 
 impl EndCursor {
-    pub(crate) fn to_beg(self) -> BegCursor {
-        let (cycle, offset) = if self.offset == self.wrap {
-            (self.cycle + 1, 0)
-        } else {
-            (self.cycle, self.offset)
-        };
-        BegCursor { cycle, offset }
+    pub(crate) fn zero() -> Self {
+        Self::default()
     }
 
     /// Returns the next contiguous region of size `amount` assuming this this
     /// cursor points into a circular buffer of size `capacity`.
-    pub(crate) fn next_region(&self, amount: usize, capacity: usize) -> (Increment, bool) {
+    pub(crate) fn next_region(&self, amount: usize, capacity: usize) -> Interval {
         let amount = amount as isize;
         let capacity = capacity as isize;
         if self.offset + amount > capacity {
+            // Not enough space => wrap to next cycle
             let cycle = self.cycle + 1;
             let beg = BegCursor { offset: 0, cycle };
             let end = EndCursor {
                 offset: amount,
                 cycle,
-                wrap: self.offset,
             };
-            (Increment { beg, end }, true)
+            Interval {
+                beg,
+                end,
+                high_mark: Some(self.offset),
+            }
         } else {
+            // Enough space => this cycle
+            // This beg will never be at the end point for the cycle
+            // (the high mark or the capacity)
+            // precisely because there is space left.
+            let beg = BegCursor {
+                offset: self.offset,
+                cycle: self.cycle,
+            };
             let end = EndCursor {
                 offset: self.offset + amount,
                 ..*self
             };
-            (Increment { beg: self.to_beg(), end }, false)
+            Interval {
+                beg,
+                end,
+                high_mark: None,
+            }
+        }
+    }
+
+    pub(crate) fn to_beg(&self, high_mark: Option<isize>) -> BegCursor {
+        if let Some(high_mark) = high_mark {
+            if high_mark == self.offset {
+                return BegCursor {
+                    offset: 0,
+                    cycle: self.cycle + 1,
+                };
+            }
+        }
+        BegCursor {
+            offset: self.offset,
+            cycle: self.cycle,
         }
     }
 }
@@ -134,30 +181,26 @@ mod tests {
     #[test]
     #[rustfmt::skip]
     fn cursor_inc_region() {
-        let c = BegCursor::zero().to_end(20);
+        let c = EndCursor{ cycle: 0, offset: 0 };
         
         // no wrap
-        let (inc,wrapped) = c.next_region(10, 20);
-        assert!(!wrapped);
+        let inc = c.next_region(10, 20);
         assert_eq!(inc.beg, BegCursor{offset:0,cycle:0});
-        assert_eq!(inc.end, EndCursor{offset:10,cycle:0,wrap:20});
+        assert_eq!(inc.end, EndCursor{offset:10,cycle:0});
 
         // no wrap - exact fit
-        let (inc,wrapped) = inc.end.next_region(10, 20);
-        assert!(!wrapped);
+        let inc = inc.end.next_region(10, 20);
         assert_eq!(inc.beg, BegCursor{offset:10,cycle:0});
-        assert_eq!(inc.end, EndCursor{offset:20,cycle:0,wrap:20});
+        assert_eq!(inc.end, EndCursor{offset:20,cycle:0});
         
         // wrap
-        let (inc,wrapped) = inc.end.next_region(15, 20);
-        assert!(wrapped);
+        let inc = inc.end.next_region(15, 20);
         assert_eq!(inc.beg, BegCursor{offset:0,cycle:1});
-        assert_eq!(inc.end, EndCursor{offset:15,cycle:1,wrap:10});
+        assert_eq!(inc.end, EndCursor{offset:15,cycle:1});
 
         // wrap - can't fit
-        let (inc,wrapped) = inc.end.next_region(15, 20);
-        assert!(wrapped);
+        let inc = inc.end.next_region(15, 20);
         assert_eq!(inc.beg, BegCursor{offset:0,cycle:2});
-        assert_eq!(inc.end, EndCursor{offset:15,cycle:2,wrap:15});
+        assert_eq!(inc.end, EndCursor{offset:15,cycle:2});
     }
 }

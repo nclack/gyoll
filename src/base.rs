@@ -1,4 +1,5 @@
 mod channel;
+mod counter;
 mod cursor;
 mod receiver;
 mod region;

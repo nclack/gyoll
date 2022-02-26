@@ -6,6 +6,7 @@ use parking_lot::{RwLock, RwLockUpgradableReadGuard};
 
 use crate::base::cursor::EndCursor;
 
+use super::cursor::Interval;
 use super::{
     channel::{Channel, RawChannel},
     cursor::BegCursor,
@@ -42,47 +43,82 @@ impl Sender {
                 return None;
             }
 
-            let (inc, wrapped) = ch.write_head.next_region(nbytes, ch.capacity);
+            let prev_write_head = ch.write_head;
+            let inc = ch.write_head.next_region(nbytes, ch.capacity);
 
             // Reserve the region even though we haven't fully acquired it yet.
-            ch.outstanding_writes.insert(inc.beg);
-            if wrapped {
-                ch.high_mark = inc.end.wrap;
+            //
+            // The new region will be > any outstanding_write, but if there
+            // are none, we need to update the write_tail. This will assist
+            // with wrapping around a cycle sometimes.
+            if ch.outstanding_writes.is_empty() {
+                ch.write_tail=inc.beg;
             }
             ch.write_head = inc.end;
+            ch.outstanding_writes.insert(inc);
+
+            //FIXME: this should be a debug_assert at best. Maybe a test.
+            assert!(
+                ch.write_tail <= inc.beg,
+                "write_tail: {} inc_beg: {}",
+                ch.write_tail,
+                inc.beg
+            );
 
             fn collide(w: &EndCursor, r: &BegCursor) -> bool {
-                // On the same cycle, there can be no collision bc enforce r<=w elsewhere.
-                // Otherwise,
+                // On the same cycle, there can be no collision bc enforce
+                // r<=w elsewhere. Otherwise,
                 w.cycle > r.cycle && (w.offset > r.offset || w.cycle > r.cycle + 1)
                 // The w.cycle>r.cycle+1 case handles when the first unread
                 // byte is hanging off the end of the cycle.
             }
 
-            while collide(&inc.end, &ch.min_read_pos()) && ch.is_accepting_writes {
-                trace!("     - {} r:{}", inc, ch.min_read_pos());
+            while collide(&inc.end, &ch.read_tail) && ch.is_accepting_writes {
+                trace!("     - {} r:{}", inc, ch.read_tail);
                 self.channel.space_available.wait(&mut ch);
-                trace!("exit - {} r:{}", inc, ch.min_read_pos());
+                trace!("exit - {} r:{}", inc, ch.read_tail);
             }
             assert!(
-                inc.beg.cycle - ch.min_read_pos().cycle < 3,
+                inc.beg.cycle - ch.read_tail.cycle < 3, // FIXME: tighten up
                 "inc:{} r:{}",
                 inc,
-                ch.min_read_pos()
+                ch.read_tail
             );
 
             if !ch.is_accepting_writes {
-                // don't need to fix the write head bc we won't be doing more writes
-                ch.outstanding_writes.remove(&inc.beg);
+                // Once the channel stops accepting writes, it cannot be
+                // reopened. There may be some outstanding mutable regions.
+                // When these get released they'll update the write_tail
+                // appropriately. The write_head should move back to the start
+                // of the uncommitted region. This is just a min over all the
+                // outstanding prev_write_heads.
+                //
+                // While threads are waking the write_head is in an undefined
+                // state. No write's are incoming. The only dependency to
+                // worry about is write_tail, which defaults to write_head
+                // when there are no outstanding regions. But that's precisely
+                // the point where write_head is guaranteed to be correct.
+                ch.outstanding_writes.remove(&inc);
+                ch.write_head = ch.write_head.min(prev_write_head);
                 return None;
             }
 
             // At this point there's space available so we're ready to reserve
             // the region.
-            ch.read_head = ch.read_head.max(inc.end);
 
+            // // FIXME: iterating here seems excessive.
+            // ch.read_head = ch
+            //     .outstanding_writes
+            //     .iter()
+            //     .min()
+            //     .map(|e| e.beg.to_end(e.high_mark))
+            //     .unwrap_or(ch.read_head);
+            // // update high mark when read_head crosses a cycle boundary
+            // if ch.read_head.cycle > ch.read_tail.cycle && inc.high_mark.is_some() {
+            //     ch.high_mark = inc.high_mark;
+            // }
             let ptr = unsafe { ch.ptr.as_ptr().offset(inc.beg.offset) };
-            (inc.beg, ptr)
+            (inc, ptr)
         };
 
         // Finally, construct the region
@@ -94,41 +130,103 @@ impl Sender {
         })
     }
 
-    pub(crate) fn unreserve(&self, beg: &BegCursor) {
+    pub(crate) fn unreserve(&self, interval: &Interval) {
         let mut ch = self.channel.inner.lock();
-        ch.outstanding_writes.remove(beg);
+        ch.outstanding_writes.remove(interval);
+        // FIXME: there's got to be a better way to encode the fact that these
+        //        are dependant on outstanding_writes
+        let mn = ch.outstanding_writes.iter().min().map(|e| *e);
+        // The outstanding_writes includes the uncommitted writes, so if it's
+        // empty the high_mark should be the last interval removed.
+        ch.write_tail = mn
+            .map(|e| e.beg)
+            .unwrap_or(interval.end.to_beg(interval.high_mark));
+        // read_head should default to write_tail when there are no
+        // outstanding_writes. But write_tail defaults to interval.end in that
+        // case. Take that shortcut below to avoid switching the sense of the
+        // endpoint.
+        ch.read_head = mn
+            .map(|e| e.beg.to_end(e.high_mark))
+            .unwrap_or(interval.end);
+
+        // update high mark when read_head crosses a cycle boundary
+        if ch.read_head.cycle > ch.read_tail.cycle && interval.high_mark.is_some() {
+            ch.high_mark = interval.high_mark;
+        }
     }
 }
 
 #[cfg(test)]
 mod test {
+    use std::{
+        sync::{
+            atomic::{AtomicBool, AtomicU8, Ordering},
+            Arc,
+        },
+        thread::{sleep, spawn},
+        time::Duration,
+    };
+
+    use log::info;
+
     use crate::base::{
         channel,
-        cursor::{BegCursor, EndCursor},
+        cursor::{BegCursor, EndCursor, Interval},
         region::MutRegion,
     };
 
     #[test]
     #[rustfmt::skip]
     fn send_wrap_behavior() {
+        let done=Arc::new(AtomicBool::new(false));
+
+        let timer={
+            let done=done.clone();
+            spawn(move || {
+                sleep(Duration::from_secs_f32(1.0));
+                assert!(done.load(Ordering::SeqCst),"Failed to terminate in time.");
+            })
+        };
+
         let (mut tx,mut rx)=channel(13);
+        info!("write 5");
         {
             let reg = tx.map(5).unwrap();
-            assert_eq!(reg.cur,BegCursor { cycle: 0, offset: 0 });
+            assert_eq!(reg.cur,Interval{ 
+                beg: BegCursor { cycle: 0, offset: 0 },
+                end: EndCursor { cycle: 0, offset: 5 },
+                high_mark: None
+            });
         }
+        info!("write 5");
         {
             let reg = tx.map(5).unwrap();
-            assert_eq!(reg.cur,BegCursor { cycle: 0, offset: 5 });
+            assert_eq!(reg.cur,Interval{ 
+                beg: BegCursor { cycle: 0, offset: 5 },
+                end: EndCursor { cycle: 0, offset:10 },
+                high_mark: None
+            });
         }
+
+        info!("read all");
         while rx.next().is_some() {}; // drain so we can continue
+
+        info!("here");
         {
             let reg = tx.map(5).unwrap();
-            assert_eq!(reg.cur,BegCursor { cycle: 1, offset: 0 });
+            assert_eq!(reg.cur,Interval{ 
+                beg: BegCursor { cycle: 1, offset: 0 },
+                end: EndCursor { cycle: 1, offset: 5 },
+                high_mark: Some(10)
+            });
         }
+        info!("here");
         {
             let c=tx.channel.inner.lock();
-            assert_eq!(c.high_mark,10);
-            assert_eq!(c.write_head,EndCursor{cycle:1,offset:5, wrap: 10 });
+            assert_eq!(c.high_mark,Some(10));
+            assert_eq!(c.write_head,EndCursor{cycle:1,offset:5});
         }
+
+        done.store(true, Ordering::SeqCst);
     }
 }

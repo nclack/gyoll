@@ -10,43 +10,11 @@ use std::{
 use parking_lot::{Condvar, Mutex, RwLock};
 
 use super::{
-    cursor::{BegCursor, EndCursor},
+    counter::Counter,
+    cursor::{BegCursor, EndCursor, Interval},
     receiver::Receiver,
     sender::Sender,
 };
-
-// FIXME: Counter gets leaked to receiver and is kind of gross. Isn't there
-//        something better?
-#[derive(Debug)]
-pub(crate) struct Counter<T> {
-    inner: HashMap<T, usize>,
-}
-
-impl<T> Counter<T>
-where
-    T: Eq + Hash + Ord + Copy + Debug,
-{
-    fn new() -> Self {
-        Self {
-            inner: HashMap::new(),
-        }
-    }
-    pub(crate) fn insert(&mut self, v: T) {
-        *self.inner.entry(v).or_insert(0) += 1;
-    }
-    pub(crate) fn remove(&mut self, v: &T) {
-        if let Entry::Occupied(mut o) = self.inner.entry(*v) {
-            if *o.get() <= 1 {
-                o.remove_entry();
-            } else {
-                *o.get_mut() -= 1;
-            }
-        }
-    }
-    fn min(&self) -> Option<&T> {
-        self.inner.keys().min()
-    }
-}
 
 pub(crate) struct RawChannel {
     pub(crate) ptr: NonNull<u8>,
@@ -54,16 +22,25 @@ pub(crate) struct RawChannel {
 
     /// when closing the channel, we stop accepting writes
     pub(crate) is_accepting_writes: bool,
-    pub(crate) high_mark: isize,
+    pub(crate) high_mark: Option<isize>, 
 
-    /// max of all writers
+    /// End of regions claimed for write
+    pub(crate) write_tail: BegCursor,
+
+    /// End of claimed writes.
     pub(crate) write_head: EndCursor,
-    /// max of all written regions
+
+    /// First unread byte. New receivers start here.
+    pub(crate) read_tail: BegCursor,
+
+    /// End of the readable bytes
     pub(crate) read_head: EndCursor,
 
-    pub(crate) outstanding_writes: HashSet<BegCursor>,
+    pub(crate) outstanding_writes: HashSet<Interval>,
     pub(crate) outstanding_reads: Counter<BegCursor>,
 }
+// FIXME: Counter gets leaked to receiver and is kind of gross. Isn't there
+//        something better?
 
 impl RawChannel {
     fn new(nbytes: usize) -> Self {
@@ -79,40 +56,14 @@ impl RawChannel {
             ptr,
             capacity: nbytes,
             is_accepting_writes: true,
-            high_mark: 0,
-            write_head: EndCursor {
-                cycle:-1,
-                offset:nbytes as isize,
-                wrap: nbytes as isize,
-            },
-            read_head: EndCursor{
-                cycle:-1,
-                offset:nbytes as isize,
-                wrap: nbytes as isize,
-            },
+            high_mark: None,
+            write_head: EndCursor::zero(),
+            write_tail: BegCursor::zero(),
+            read_head: EndCursor::zero(),
+            read_tail: BegCursor::zero(),
             outstanding_writes: HashSet::new(),
             outstanding_reads: Counter::new(),
         }
-    }
-
-    pub(crate) fn min_read_pos(&self) -> BegCursor {
-        // If there are no active receivers, return the min writer pos
-        // (the queue appears initially empty for new receivers)
-        if let Some(&c) = self.outstanding_reads.min() {
-            c
-        } else {
-            dbg!(self.read_head().to_beg())
-        }
-    }
-
-    // First unread byte
-    pub(crate) fn read_head(&self) -> EndCursor {
-        let wrap=self.read_head.wrap;
-        self.outstanding_writes
-            .iter()
-            .min()
-            .map(|e| e.to_end(wrap))
-            .unwrap_or(self.read_head)
     }
 }
 
