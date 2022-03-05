@@ -1,6 +1,6 @@
 use std::{
     alloc::{self, Layout},
-    collections::{hash_map::Entry, HashMap, HashSet},
+    collections::{hash_map::Entry, HashMap, HashSet, btree_set::Intersection},
     fmt::{Debug, Display},
     hash::Hash,
     ptr::NonNull,
@@ -24,15 +24,8 @@ pub(crate) struct RawChannel {
     /// when closing the channel, we stop accepting writes
     pub(crate) is_accepting_writes: bool,
 
-    // This is an offset that behaves like an EndCursor.
-    // It is relevant for the read side.
-    pub(crate) tmp_high_mark: Option<isize>,
-
-    /// End of regions claimed for write
-    pub(crate) write_tail: BegCursor,
-
-    /// End of claimed writes.
-    pub(crate) write_head: EndCursor,
+    /// Interval covering region reserved for writes
+    pub(crate) writes: Interval,
 
     /// Interval covering the region of readable bytes
     pub(crate) reads: Interval,
@@ -48,11 +41,7 @@ impl Display for RawChannel {
         write!(
             f,
             "write:( {write} ) read:( {read} ) outstanding writes: {outw:?} reads:{outr:?}",
-            write = Interval {
-                beg: self.write_tail,
-                end: self.write_head,
-                high_mark: self.tmp_high_mark
-            },
+            write = self.writes,
             read = self.reads,
             outw = self.outstanding_writes,
             outr = self.outstanding_reads
@@ -74,9 +63,7 @@ impl RawChannel {
             ptr,
             capacity: nbytes,
             is_accepting_writes: true,
-            tmp_high_mark: None,
-            write_head: EndCursor::zero(),
-            write_tail: BegCursor::zero(),
+            writes: Interval::default(),
             reads: Interval::default(),
             outstanding_writes: HashSet::new(),
             outstanding_reads: Counter::new(),

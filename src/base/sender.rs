@@ -43,8 +43,8 @@ impl Sender {
                 return None;
             }
 
-            let prev_write_head = ch.write_head;
-            let inc = ch.write_head.next_region(nbytes, ch.capacity);
+            let prev_write_head = ch.writes.end;
+            let inc = ch.writes.end.next_region(nbytes, ch.capacity);
 
             // Reserve the region even though we haven't fully acquired it yet.
             //
@@ -52,16 +52,16 @@ impl Sender {
             // are none, we need to update the write_tail. This will assist
             // with wrapping around a cycle sometimes.
             if ch.outstanding_writes.is_empty() {
-                ch.write_tail = inc.beg;
+                ch.writes.beg = inc.beg;
             }
-            ch.write_head = inc.end;
+            ch.writes.end = inc.end;
             ch.outstanding_writes.insert(inc);
 
             //FIXME: this should be a debug_assert at best. Maybe a test.
             assert!(
-                ch.write_tail <= inc.beg,
+                ch.writes.beg <= inc.beg,
                 "write_tail: {} inc_beg: {}",
-                ch.write_tail,
+                ch.writes.end,
                 inc.beg
             );
 
@@ -99,7 +99,7 @@ impl Sender {
                 // when there are no outstanding regions. But that's precisely
                 // the point where write_head is guaranteed to be correct.
                 ch.outstanding_writes.remove(&inc);
-                ch.write_head = ch.write_head.min(prev_write_head);
+                ch.writes.end = ch.writes.end.min(prev_write_head);
                 return None;
             }
 
@@ -107,7 +107,7 @@ impl Sender {
             // the region.
             if inc.high_mark.is_some() {
                 trace!("latch {}", inc);
-                ch.tmp_high_mark = inc.high_mark;
+                ch.writes.high_mark = inc.high_mark;
             }
 
             let ptr = unsafe { ch.ptr.as_ptr().offset(inc.beg.offset) };
@@ -131,7 +131,7 @@ impl Sender {
         let mn = ch.outstanding_writes.iter().min().map(|e| *e);
         // The outstanding_writes includes the uncommitted writes, so if it's
         // empty the high_mark should be the last interval removed.
-        ch.write_tail = mn
+        ch.writes.beg = mn
             .map(|e| e.beg)
             .unwrap_or(interval.end.to_beg(interval.high_mark));
 
@@ -156,8 +156,8 @@ impl Sender {
         // update high mark for when read_head crosses a cycle boundary
         if c1 > c0 {
             trace!("set {} {}", c0, c1);
-            ch.reads.high_mark = ch.tmp_high_mark;
-            ch.tmp_high_mark = None;
+            ch.reads.high_mark = ch.writes.high_mark;
+            ch.writes.high_mark = None;
         }
     }
 }
@@ -230,7 +230,7 @@ mod test {
         {
             let c=tx.channel.inner.lock();
             assert_eq!(c.reads.high_mark,Some(10));
-            assert_eq!(c.write_head,EndCursor{cycle:1,offset:5});
+            assert_eq!(c.writes.end,EndCursor{cycle:1,offset:5});
         }
 
         done.store(true, Ordering::SeqCst);

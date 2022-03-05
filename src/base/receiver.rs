@@ -38,7 +38,7 @@ impl Receiver {
 
     pub fn is_open(&self) -> bool {
         let ch = self.channel.inner.lock();
-        ch.is_accepting_writes || self.cur != ch.write_tail
+        ch.is_accepting_writes || self.cur != ch.writes.beg
     }
 
     pub fn next(&mut self) -> Option<Region> {
@@ -56,7 +56,7 @@ impl Receiver {
         let (cur, ptr) = {
             let mut ch = self.channel.inner.lock();
 
-            let w = ch.write_tail;
+            let w = ch.writes.beg;
             let end = ch.reads.end;
 
             assert!(self.cur <= w, "read cur:{} - {}", self.cur, ch);

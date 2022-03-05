@@ -112,7 +112,7 @@ impl Env {
 }
 
 impl ReadyEnv {
-    fn run(&self, iter: u64) {
+    fn run(&self, _iter: u64) {
         let mut is_done = self.is_done.lock();
         *is_done = false;
 
