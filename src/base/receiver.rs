@@ -162,7 +162,7 @@ impl Receiver {
             .unwrap_or(&interval.end.to_beg(interval.high_mark));
         let c1 = ch.reads.beg.cycle;
         if c1 > c0 {
-            trace!("unset {} {} {:?} cur:{} int:{} ch.reads:{:?}", c0, c1,ch.reads,self.cur, interval,ch.outstanding_reads);
+            trace!("unset {} {} reads:{} cur:{} int:{} ch.reads:{:?}", c0, c1,ch.reads,self.cur, interval,ch.outstanding_reads);
             ch.reads.high_mark = None;
         }
         self.channel.space_available.notify_all();

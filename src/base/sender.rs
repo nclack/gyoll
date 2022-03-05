@@ -105,6 +105,10 @@ impl Sender {
 
             // At this point there's space available so we're ready to reserve
             // the region.
+
+            // If this increment causes a wrap, then record that as the high
+            // mark for the "writes" interval. Later this will be used to set
+            // the high mark for the "reads".
             if inc.high_mark.is_some() {
                 trace!("latch {}", inc);
                 ch.writes.high_mark = inc.high_mark;
