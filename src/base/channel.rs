@@ -1,7 +1,7 @@
 use std::{
     alloc::{self, Layout},
     collections::{hash_map::Entry, HashMap, HashSet},
-    fmt::Debug,
+    fmt::{Debug, Display},
     hash::Hash,
     ptr::NonNull,
     sync::Arc,
@@ -16,6 +16,7 @@ use super::{
     sender::Sender,
 };
 
+#[derive(Debug)]
 pub(crate) struct RawChannel {
     pub(crate) ptr: NonNull<u8>,
     pub(crate) capacity: usize,
@@ -26,7 +27,7 @@ pub(crate) struct RawChannel {
     // This is an offset that behaves like an EndCursor.
     // It is relevant for the read side.
     pub(crate) tmp_high_mark: Option<isize>,
-    pub(crate) high_mark: Option<isize>,
+    pub(crate) read_high_mark: Option<isize>,
 
     /// End of regions claimed for write
     pub(crate) write_tail: BegCursor,
@@ -46,6 +47,27 @@ pub(crate) struct RawChannel {
 // FIXME: Counter gets leaked to receiver and is kind of gross. Isn't there
 //        something better?
 
+impl Display for RawChannel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "write:( {write} ) read:( {read} ) outstanding writes: {outw:?} reads:{outr:?}",
+            write = Interval {
+                beg: self.write_tail,
+                end: self.write_head,
+                high_mark: self.tmp_high_mark
+            },
+            read = Interval {
+                beg: self.read_tail,
+                end: self.read_head,
+                high_mark: self.read_high_mark
+            },
+            outw = self.outstanding_writes,
+            outr = self.outstanding_reads
+        )
+    }
+}
+
 impl RawChannel {
     fn new(nbytes: usize) -> Self {
         // Align to 4096
@@ -61,7 +83,7 @@ impl RawChannel {
             capacity: nbytes,
             is_accepting_writes: true,
             tmp_high_mark: None,
-            high_mark: None,
+            read_high_mark: None,
             write_head: EndCursor::zero(),
             write_tail: BegCursor::zero(),
             read_head: EndCursor::zero(),

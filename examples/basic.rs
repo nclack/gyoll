@@ -67,12 +67,11 @@ fn main() {
                 // rx.next(); // <-- doesn't work bc rx is mut
                 read_bytes += available.len();
                 debug!(
-                    "0x{:0x} {:4}:{:4}",
-                    // "0x{:0x} {:4}:{:4} - {:?}",
+                    "0x{:0x} {:4}:{:4} {}",
                     available.as_ptr() as isize,
                     available.as_ptr() as isize - first,
                     available.as_ptr() as isize - first + available.len() as isize,
-                    // &available[0..std::cmp::min(20, available.len())]
+                    available.cycle()
                 );
                 // drop(available);
                 // sleep(Duration::from_millis(10));

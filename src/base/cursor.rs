@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use std::{collections::btree_set::Intersection, fmt::Display};
 
 #[derive(Default, Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
 pub(crate) struct BegCursor {
@@ -24,6 +24,18 @@ pub(crate) struct Interval {
     pub(crate) high_mark: Option<isize>,
 }
 
+impl Interval {
+    pub(crate) fn len(&self) -> isize {
+        if self.end.cycle == self.beg.cycle {
+            self.end.offset - self.beg.offset
+        } else {
+            assert!(self.end.cycle > self.beg.cycle, "{}", self);
+            let high_mark = self.high_mark.unwrap();
+            self.end.offset + self.high_mark.unwrap() - self.beg.offset
+        }
+    }
+}
+
 impl PartialOrd for Interval {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         match self.beg.partial_cmp(&other.beg) {
@@ -44,10 +56,9 @@ impl Display for Interval {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{cycle:6}: {beg:6}-{end:6} high:{high}",
-            cycle = self.beg.cycle,
-            beg = self.beg.offset,
-            end = self.end.offset,
+            "{beg}-{end} high:{high}",
+            beg = self.beg,
+            end = self.end,
             high = if let Some(h) = self.high_mark { h } else { -1 }
         )
     }
@@ -59,7 +70,13 @@ impl BegCursor {
     }
 
     pub(crate) fn is_empty(&self, other: &EndCursor) -> bool {
-        (other.cycle < self.cycle) || (self.offset == other.offset && self.cycle == other.cycle)
+        Interval {
+            beg: *self,
+            end: *other,
+            high_mark: None,
+        }
+        .len()
+            == 0
     }
 
     pub(crate) fn to_end(&self, high_mark: Option<isize>) -> EndCursor {
@@ -179,7 +196,10 @@ mod tests {
     fn cursor_order() {
         assert!(
             BegCursor {offset: 0,cycle: 1} > BegCursor {offset: 100,cycle: 0}
-        )
+        );
+        assert!(
+            EndCursor {offset: 100, cycle: 0} < EndCursor {offset: 0, cycle: 1} 
+        );
     }
 
     #[test]

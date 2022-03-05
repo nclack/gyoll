@@ -52,6 +52,13 @@ pub struct Region<'a> {
     pub(crate) buf: &'a [u8],
 }
 
+impl<'a> Region<'a> {
+    // for debuggging
+    pub fn cycle(&self)->isize {
+        self.cur.beg.cycle
+    }
+}
+
 impl<'a> Deref for Region<'a> {
     type Target = [u8];
 

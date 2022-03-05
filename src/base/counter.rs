@@ -23,6 +23,7 @@ where
         *self.inner.entry(v).or_insert(0) += 1;
     }
 
+    /// Silently ignores missing values
     pub(crate) fn remove(&mut self, v: &T) {
         if let Entry::Occupied(mut o) = self.inner.entry(*v) {
             if *o.get() <= 1 {
