@@ -12,7 +12,7 @@ pub(crate) struct EndCursor {
     pub(crate) offset: isize,
 }
 
-#[derive(Hash, Clone, Copy, Eq, PartialEq, Debug)]
+#[derive(Hash, Clone, Copy, Eq, PartialEq, Debug, Default)]
 pub(crate) struct Interval {
     /// The beginning of the region.
     pub(crate) beg: BegCursor,
@@ -35,6 +35,7 @@ impl Interval {
         }
     }
 }
+
 
 impl PartialOrd for Interval {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {

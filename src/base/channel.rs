@@ -27,7 +27,6 @@ pub(crate) struct RawChannel {
     // This is an offset that behaves like an EndCursor.
     // It is relevant for the read side.
     pub(crate) tmp_high_mark: Option<isize>,
-    pub(crate) read_high_mark: Option<isize>,
 
     /// End of regions claimed for write
     pub(crate) write_tail: BegCursor,
@@ -35,11 +34,8 @@ pub(crate) struct RawChannel {
     /// End of claimed writes.
     pub(crate) write_head: EndCursor,
 
-    /// First unread byte. New receivers start here.
-    pub(crate) read_tail: BegCursor,
-
-    /// End of the readable bytes
-    pub(crate) read_head: EndCursor,
+    /// Interval covering the region of readable bytes
+    pub(crate) reads: Interval,
 
     pub(crate) outstanding_writes: HashSet<Interval>,
     pub(crate) outstanding_reads: Counter<BegCursor>,
@@ -57,11 +53,7 @@ impl Display for RawChannel {
                 end: self.write_head,
                 high_mark: self.tmp_high_mark
             },
-            read = Interval {
-                beg: self.read_tail,
-                end: self.read_head,
-                high_mark: self.read_high_mark
-            },
+            read = self.reads,
             outw = self.outstanding_writes,
             outr = self.outstanding_reads
         )
@@ -83,11 +75,9 @@ impl RawChannel {
             capacity: nbytes,
             is_accepting_writes: true,
             tmp_high_mark: None,
-            read_high_mark: None,
             write_head: EndCursor::zero(),
             write_tail: BegCursor::zero(),
-            read_head: EndCursor::zero(),
-            read_tail: BegCursor::zero(),
+            reads: Interval::default(),
             outstanding_writes: HashSet::new(),
             outstanding_reads: Counter::new(),
         }

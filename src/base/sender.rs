@@ -73,16 +73,16 @@ impl Sender {
                 // byte is hanging off the end of the cycle.
             }
 
-            while collide(&inc.end, &ch.read_tail) && ch.is_accepting_writes {
-                trace!("     - {} r:{}", inc, ch.read_tail);
+            while collide(&inc.end, &ch.reads.beg) && ch.is_accepting_writes {
+                trace!("     - {} r:{}", inc, ch.reads.beg);
                 self.channel.space_available.wait(&mut ch);
-                trace!("exit - {} r:{}", inc, ch.read_tail);
+                trace!("exit - {} r:{}", inc, ch.reads.beg);
             }
             assert!(
-                inc.beg.cycle - ch.read_tail.cycle < 3, // FIXME: tighten up
+                inc.beg.cycle - ch.reads.beg.cycle < 3, // FIXME: tighten up
                 "inc:{} r:{}",
                 inc,
-                ch.read_tail
+                ch.reads.beg
             );
 
             if !ch.is_accepting_writes {
@@ -139,24 +139,24 @@ impl Sender {
         // outstanding_writes. But write_tail defaults to interval.end in that
         // case. Take that shortcut below to avoid switching the sense of the
         // endpoint.
-        let c0 = ch.read_head.cycle;
-        ch.read_head = mn
+        let c0 = ch.reads.end.cycle;
+        ch.reads.end = mn
             .map(|e| e.beg.to_end(e.high_mark))
             .unwrap_or(interval.end);
-        let c1 = ch.read_head.cycle;
+        let c1 = ch.reads.end.cycle;
 
         assert!(
-            ch.read_head.to_beg(None)
+            ch.reads.end.to_beg(None)
                 >= *ch
                     .outstanding_reads
                     .max()
-                    .unwrap_or(&ch.read_head.to_beg(None))
+                    .unwrap_or(&ch.reads.end.to_beg(None))
         );
 
         // update high mark for when read_head crosses a cycle boundary
         if c1 > c0 {
             trace!("set {} {}", c0, c1);
-            ch.read_high_mark = ch.tmp_high_mark;
+            ch.reads.high_mark = ch.tmp_high_mark;
             ch.tmp_high_mark = None;
         }
     }
@@ -229,7 +229,7 @@ mod test {
         info!("here");
         {
             let c=tx.channel.inner.lock();
-            assert_eq!(c.read_high_mark,Some(10));
+            assert_eq!(c.reads.high_mark,Some(10));
             assert_eq!(c.write_head,EndCursor{cycle:1,offset:5});
         }
 
