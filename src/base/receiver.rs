@@ -20,7 +20,7 @@ pub struct Receiver {
 
     /// The read position
     /// This is often the beginning of the next read region.
-    cur: BegCursor,
+    cur: EndCursor,
 }
 
 unsafe impl Send for Receiver {}
@@ -28,7 +28,7 @@ unsafe impl Sync for Receiver {}
 
 impl Receiver {
     pub(crate) fn new(channel: Arc<Channel>) -> Self {
-        let cur = channel.inner.lock().reads.beg;
+        let cur = channel.inner.lock().reads.end;
         Receiver { channel, cur }
     }
 
@@ -38,7 +38,7 @@ impl Receiver {
 
     pub fn is_open(&self) -> bool {
         let ch = self.channel.inner.lock();
-        ch.is_accepting_writes || self.cur != ch.writes.beg
+        ch.is_accepting_writes || self.cur != ch.reads.end
     }
 
     pub fn next(&mut self) -> Option<Region> {
@@ -53,17 +53,25 @@ impl Receiver {
         //      Create a region [cur,high]
         //
 
-        let (cur, ptr) = {
+        let (interval, ptr) = {
             let mut ch = self.channel.inner.lock();
+
+            assert!(
+                (ch.reads.high_mark.is_some() && ch.reads.end.cycle == ch.reads.beg.cycle + 1)
+                    || (ch.reads.high_mark.is_none() && ch.reads.end.cycle == ch.reads.beg.cycle),
+                "cur:{} reads:{}",
+                self.cur,
+                ch.reads
+            );
 
             let w = ch.writes.beg;
             let end = ch.reads.end;
 
-            assert!(self.cur <= w, "read cur:{} - {}", self.cur, ch);
+            assert!(self.cur <= end, "read cur:{} - {}", self.cur, ch);
             assert!(w.cycle - self.cur.cycle <= 2, "w:{} r:{}", w, self.cur);
             {
                 let reads = Interval {
-                    beg: self.cur,
+                    beg: self.cur.to_beg(None),
                     end,
                     high_mark: ch.reads.high_mark,
                 };
@@ -77,25 +85,23 @@ impl Receiver {
                 }
             }
 
-            let cur: Interval = if self.cur.cycle == end.cycle {
+            assert!(self.cur.cycle <= w.cycle);
+            let interval: Interval = if self.cur.cycle == end.cycle {
                 // same cycle case
-                assert_ne!(end.offset, self.cur.offset);
-                let cur = Interval {
-                    beg: self.cur,
+                Interval {
+                    beg: self.cur.to_beg(None),
                     end,
                     high_mark: None,
-                };
-                assert_eq!(cur.len(), end.offset - self.cur.offset);
-                cur
+                }
             } else {
-                assert!(self.cur.cycle < w.cycle);
                 let high_mark = ch
-                    .reads.high_mark
+                    .reads
+                    .high_mark
                     .expect(&format!("cur: {}, ch:{}", self.cur, ch));
                 // read_head is in the next cycle
                 if self.cur.offset == high_mark {
                     // already at high, wrap
-                    let cur = Interval {
+                    let interval = Interval {
                         beg: BegCursor {
                             cycle: self.cur.cycle + 1,
                             offset: 0,
@@ -103,45 +109,38 @@ impl Receiver {
                         end,
                         high_mark: ch.reads.high_mark,
                     };
-                    assert_eq!(cur.len(), end.offset);
-                    cur
+                    assert_eq!(interval.len(), end.offset);
+                    assert_eq!(interval.beg.cycle, ch.reads.beg.cycle + 1);
+
+                    interval
                 } else {
                     // take remainder on this cycle
-                    let cur = Interval {
-                        beg: self.cur,
+                    let interval = Interval {
+                        beg: self.cur.to_beg(None),
                         end: EndCursor {
                             cycle: self.cur.cycle,
                             offset: high_mark,
                         },
                         high_mark: None,
                     };
-                    assert_eq!(cur.len(), high_mark - self.cur.offset);
-                    cur
+                    assert_eq!(interval.len(), high_mark - self.cur.offset);
+                    interval
                 }
             };
-            assert!(cur.end<=ch.reads.end,"cur:{} ch:{}",cur,ch);
-            let ptr = unsafe { ch.ptr.as_ptr().offset(cur.beg.offset) as *const _ };
+            assert!(interval.end <= ch.reads.end, "cur:{} ch:{}", interval, ch);
+            let ptr = unsafe { ch.ptr.as_ptr().offset(interval.beg.offset) as *const _ };
 
-            // Remove should precede insert since it's a noop if there's
-            // something missing.
-            //
-            // Consider, self.cur starts at A. Outstanding={A:1}
-            // 1. Retrieve interval A-B: self.cur=B, outstanding={A:1}
-            // 2. Retrieve interval B-C: self.cur=C, outstanding={A:1,B:1}
-            //
-            // Doing the insert before remove, would result in outstanding={A:1}
-            // on step 2.
-            ch.outstanding_reads.insert(cur.beg);
-            ch.outstanding_reads.remove(&self.cur);
-            (cur, ptr)
+            ch.outstanding_reads.insert(interval.beg);
+            (interval, ptr)
         };
-        self.cur = cur.end.to_beg(cur.high_mark);
-        assert!(cur.len() > 0);
-        if cur.len() > 0 {
+        self.cur = interval.end;
+
+        assert!(interval.len() > 0);
+        if interval.len() > 0 {
             Some(Region {
                 owner: self,
-                cur,
-                buf: unsafe { std::slice::from_raw_parts(ptr, cur.len() as _) },
+                cur: interval,
+                buf: unsafe { std::slice::from_raw_parts(ptr, interval.len() as _) },
             })
         } else {
             return None;
@@ -154,15 +153,25 @@ impl Receiver {
         // otherwise it's just the min over all outstanding reads.
         let mut ch = self.channel.inner.lock();
         ch.outstanding_reads.remove(&interval.beg);
-        ch.outstanding_reads.insert(interval.end.to_beg(interval.high_mark));
+        ch.outstanding_reads
+            .insert(interval.end.to_beg(interval.high_mark));
         let c0 = ch.reads.beg.cycle;
+        let before = ch.reads;
         ch.reads.beg = *ch
             .outstanding_reads
             .min()
             .unwrap_or(&interval.end.to_beg(interval.high_mark));
         let c1 = ch.reads.beg.cycle;
         if c1 > c0 {
-            trace!("unset {} {} reads:{} cur:{} int:{} ch.reads:{:?}", c0, c1,ch.reads,self.cur, interval,ch.outstanding_reads);
+            trace!(
+                "unset {} {} reads:{} cur:{} int:{} ch.outstanding_reads:{:?}",
+                c0,
+                c1,
+                before,
+                self.cur,
+                interval,
+                ch.outstanding_reads
+            );
             ch.reads.high_mark = None;
         }
         self.channel.space_available.notify_all();
