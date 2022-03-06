@@ -135,9 +135,8 @@ impl Sender {
         let mn = ch.outstanding_writes.iter().min().map(|e| *e);
         // The outstanding_writes includes the uncommitted writes, so if it's
         // empty the high_mark should be the last interval removed.
-        ch.writes.beg = mn
-            .map(|e| e.beg)
-            .unwrap_or(interval.end.to_beg(interval.high_mark));
+        ch.writes.beg = mn.map(|e| e.beg).unwrap_or(interval.end.to_beg(None)); //never wrap here
+                                                                                // FIXME: to_beg probably shouldn't use high_mark
 
         // read_head should default to write_tail when there are no
         // outstanding_writes. But write_tail defaults to interval.end in that
@@ -159,7 +158,13 @@ impl Sender {
 
         // update high mark for when read_head crosses a cycle boundary
         if c1 > c0 {
-            trace!("set {} {}", c0, c1);
+            trace!(
+                "set {} {} cycle: {} high:{:?}",
+                c0,
+                c1,
+                ch.reads.beg.cycle,
+                ch.writes.high_mark
+            );
             ch.reads.high_mark = ch.writes.high_mark;
             ch.writes.high_mark = None;
         }

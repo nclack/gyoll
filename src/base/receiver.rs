@@ -28,7 +28,12 @@ unsafe impl Sync for Receiver {}
 
 impl Receiver {
     pub(crate) fn new(channel: Arc<Channel>) -> Self {
-        let cur = channel.inner.lock().reads.end;
+        let cur = {
+            let mut ch = channel.inner.lock();
+            let cur = ch.reads.beg.to_end(None);
+            ch.outstanding_reads.insert(cur.to_beg(None));
+            cur
+        };
         Receiver { channel, cur }
     }
 
@@ -42,17 +47,6 @@ impl Receiver {
     }
 
     pub fn next(&mut self) -> Option<Region> {
-        // Assert
-        //  - write point >= read point
-        //  - write point is < one cycle ahead
-        //
-        // Cases:
-        //  - write point is on same cycle
-        //      Create a region [cur,w]
-        //  - write point is on next cycle
-        //      Create a region [cur,high]
-        //
-
         let (interval, ptr) = {
             let mut ch = self.channel.inner.lock();
 
@@ -63,74 +57,47 @@ impl Receiver {
                 self.cur,
                 ch.reads
             );
+            assert!(
+                ch.reads.beg <= self.cur.to_beg(None) && self.cur <= ch.reads.end,
+                "cur:{} reads:{}",
+                self.cur,
+                ch.reads
+            );
 
-            let w = ch.writes.beg;
-            let end = ch.reads.end;
+            let beg = self.cur.to_beg(if self.cur.cycle == ch.reads.end.cycle {
+                None
+            } else {
+                ch.reads.high_mark
+            });
 
-            assert!(self.cur <= end, "read cur:{} - {}", self.cur, ch);
-            assert!(w.cycle - self.cur.cycle <= 2, "w:{} r:{}", w, self.cur);
-            {
-                let reads = Interval {
-                    beg: self.cur.to_beg(None),
-                    end,
-                    high_mark: ch.reads.high_mark,
-                };
-                if reads.len() == 0 {
-                    // The read pos is at the min writer pos.  There is no data
-                    // available.
-
-                    // TODO: ? block until data is available. Return None on shutdown
-                    // Original design doesn't block on map
-                    return None;
-                }
-            }
-
-            assert!(self.cur.cycle <= w.cycle);
-            let interval: Interval = if self.cur.cycle == end.cycle {
-                // same cycle case
+            let interval = if beg.cycle == ch.reads.end.cycle {
                 Interval {
-                    beg: self.cur.to_beg(None),
-                    end,
+                    beg,
+                    end: ch.reads.end,
                     high_mark: None,
                 }
             } else {
-                let high_mark = ch
-                    .reads
-                    .high_mark
-                    .expect(&format!("cur: {}, ch:{}", self.cur, ch));
-                // read_head is in the next cycle
-                if self.cur.offset == high_mark {
-                    // already at high, wrap
-                    let interval = Interval {
-                        beg: BegCursor {
-                            cycle: self.cur.cycle + 1,
-                            offset: 0,
-                        },
-                        end,
-                        high_mark: ch.reads.high_mark,
-                    };
-                    assert_eq!(interval.len(), end.offset);
-                    assert_eq!(interval.beg.cycle, ch.reads.beg.cycle + 1);
-
-                    interval
-                } else {
-                    // take remainder on this cycle
-                    let interval = Interval {
-                        beg: self.cur.to_beg(None),
-                        end: EndCursor {
-                            cycle: self.cur.cycle,
-                            offset: high_mark,
-                        },
-                        high_mark: None,
-                    };
-                    assert_eq!(interval.len(), high_mark - self.cur.offset);
-                    interval
+                assert_eq!(ch.reads.beg.cycle, beg.cycle, "beg:{} ch:{}", beg, ch);
+                assert!(ch.reads.high_mark.is_some(), "beg:{} ch:{}", beg, ch);
+                let high_mark = ch.reads.high_mark.unwrap();
+                Interval {
+                    beg,
+                    end: EndCursor {
+                        cycle: ch.reads.beg.cycle,
+                        offset: high_mark,
+                    },
+                    high_mark: None,
                 }
             };
+            if interval.len() == 0 {
+                return None;
+            }
+
             assert!(interval.end <= ch.reads.end, "cur:{} ch:{}", interval, ch);
             let ptr = unsafe { ch.ptr.as_ptr().offset(interval.beg.offset) as *const _ };
 
             ch.outstanding_reads.insert(interval.beg);
+            ch.outstanding_reads.remove(&self.cur.to_beg(None));
             (interval, ptr)
         };
         self.cur = interval.end;
@@ -153,14 +120,13 @@ impl Receiver {
         // otherwise it's just the min over all outstanding reads.
         let mut ch = self.channel.inner.lock();
         ch.outstanding_reads.remove(&interval.beg);
-        ch.outstanding_reads
-            .insert(interval.end.to_beg(interval.high_mark));
+        ch.outstanding_reads.insert(interval.end.to_beg(None));
         let c0 = ch.reads.beg.cycle;
         let before = ch.reads;
         ch.reads.beg = *ch
             .outstanding_reads
             .min()
-            .unwrap_or(&interval.end.to_beg(interval.high_mark));
+            .unwrap_or(&interval.end.to_beg(None));
         let c1 = ch.reads.beg.cycle;
         if c1 > c0 {
             trace!(
