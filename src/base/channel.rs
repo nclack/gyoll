@@ -38,8 +38,9 @@ impl Display for RawChannel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "write:( {write} ) read:( {read} ) outstanding writes: {outw:?} reads:{outr:?}",
+            "write:( {write} {closed}) read:( {read} ) outstanding writes: {outw:?} reads:{outr:?}",
             write = self.writes,
+            closed= if self.is_accepting_writes {""} else {"CLOSED"},
             read = self.reads,
             outw = self.outstanding_writes,
             outr = self.outstanding_reads

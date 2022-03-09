@@ -71,12 +71,6 @@ impl Sender {
                 self.channel.space_available.wait(&mut ch);
                 trace!("exit - {} r:{}", inc, ch.reads.beg);
             }
-            assert!(
-                inc.beg.cycle - ch.reads.beg.cycle < 2,
-                "inc:{} r:{}",
-                inc,
-                ch.reads.beg
-            );
 
             if !ch.is_accepting_writes {
                 // Once the channel stops accepting writes, it cannot be
@@ -95,6 +89,14 @@ impl Sender {
                 ch.writes.end = ch.writes.end.min(prev_write_head);
                 return None;
             }
+
+            assert!(
+                inc.beg.cycle - ch.reads.beg.cycle < 2,
+                "inc:{} r:{} ch:{}",
+                inc,
+                ch.reads.beg,
+                ch
+            );
 
             // At this point there's space available so we're ready to reserve
             // the region.
