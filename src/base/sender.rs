@@ -21,10 +21,11 @@ unsafe impl Send for Sender {}
 unsafe impl Sync for Sender {}
 
 impl Sender {
-    pub(crate) fn new(channel: Arc<Channel>) -> Self {
+    pub(super) fn new(channel: Arc<Channel>) -> Self {
         Sender { channel }
     }
 
+    /// Get a reference to the channel.
     pub fn channel(&self) -> &Arc<Channel> {
         &self.channel
     }
@@ -57,14 +58,6 @@ impl Sender {
             ch.writes.end = inc.end;
             ch.outstanding_writes.insert(inc);
 
-            //FIXME: this should be a debug_assert at best. Maybe a test.
-            assert!(
-                ch.writes.beg <= inc.beg,
-                "write_tail: {} inc_beg: {}",
-                ch.writes.end,
-                inc.beg
-            );
-
             fn collide(w: &EndCursor, r: &BegCursor) -> bool {
                 // On the same cycle, there can be no collision bc enforce
                 // r<=w elsewhere. Otherwise,
@@ -79,7 +72,7 @@ impl Sender {
                 trace!("exit - {} r:{}", inc, ch.reads.beg);
             }
             assert!(
-                inc.beg.cycle - ch.reads.beg.cycle < 3, // FIXME: tighten up
+                inc.beg.cycle - ch.reads.beg.cycle < 2,
                 "inc:{} r:{}",
                 inc,
                 ch.reads.beg
@@ -127,16 +120,15 @@ impl Sender {
         })
     }
 
-    pub(crate) fn unreserve(&self, interval: &Interval) {
+    pub(super) fn unreserve(&self, interval: &Interval) {
         let mut ch = self.channel.inner.lock();
         ch.outstanding_writes.remove(interval);
-        // FIXME: there's got to be a better way to encode the fact that these
-        //        are dependant on outstanding_writes
+
         let mn = ch.outstanding_writes.iter().min().map(|e| *e);
+
         // The outstanding_writes includes the uncommitted writes, so if it's
         // empty the high_mark should be the last interval removed.
-        ch.writes.beg = mn.map(|e| e.beg).unwrap_or(interval.end.to_beg(None)); //never wrap here
-                                                                                // FIXME: to_beg probably shouldn't use high_mark
+        ch.writes.beg = mn.map(|e| e.beg).unwrap_or(interval.end.into());
 
         // read_head should default to write_tail when there are no
         // outstanding_writes. But write_tail defaults to interval.end in that
@@ -149,11 +141,8 @@ impl Sender {
         let c1 = ch.reads.end.cycle;
 
         assert!(
-            ch.reads.end.to_beg(None)
-                >= *ch
-                    .outstanding_reads
-                    .max()
-                    .unwrap_or(&ch.reads.end.to_beg(None))
+            BegCursor::from(ch.reads.end)
+                >= *ch.outstanding_reads.max().unwrap_or(&ch.reads.end.into())
         );
 
         // update high mark for when read_head crosses a cycle boundary
@@ -245,3 +234,5 @@ mod test {
         done.store(true, Ordering::SeqCst);
     }
 }
+
+// TODO: test channel drain, outstanding writes etc

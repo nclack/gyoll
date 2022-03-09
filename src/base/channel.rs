@@ -1,6 +1,6 @@
 use std::{
     alloc::{self, Layout},
-    collections::{hash_map::Entry, HashMap, HashSet, btree_set::Intersection},
+    collections::{btree_set::Intersection, hash_map::Entry, HashMap, HashSet},
     fmt::{Debug, Display},
     hash::Hash,
     ptr::NonNull,
@@ -33,8 +33,6 @@ pub(crate) struct RawChannel {
     pub(crate) outstanding_writes: HashSet<Interval>,
     pub(crate) outstanding_reads: Counter<BegCursor>,
 }
-// FIXME: Counter gets leaked to receiver and is kind of gross. Isn't there
-//        something better?
 
 impl Display for RawChannel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

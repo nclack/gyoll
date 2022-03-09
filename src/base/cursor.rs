@@ -30,12 +30,10 @@ impl Interval {
             self.end.offset - self.beg.offset
         } else {
             assert!(self.end.cycle > self.beg.cycle, "{}", self);
-            let high_mark = self.high_mark.unwrap();
             self.end.offset + self.high_mark.unwrap() - self.beg.offset
         }
     }
 }
-
 
 impl PartialOrd for Interval {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
@@ -81,14 +79,15 @@ impl BegCursor {
     }
 
     pub(crate) fn to_end(&self, high_mark: Option<isize>) -> EndCursor {
-        // TODO: change arg to take an interval. Needs to be the interval the high_mark was pulled from
-        let (offset, cycle) = if let Some(high_mark) = high_mark {
+        if let Some(high_mark) = high_mark {
             assert_eq!(self.offset, 0);
-            (high_mark, self.cycle - 1)
+            EndCursor {
+                offset: high_mark,
+                cycle: self.cycle - 1,
+            }
         } else {
-            (self.offset, self.cycle)
-        };
-        EndCursor { offset, cycle }
+            self.into()
+        }
     }
 }
 
@@ -145,9 +144,42 @@ impl EndCursor {
                 };
             }
         }
-        BegCursor {
-            offset: self.offset,
-            cycle: self.cycle,
+        self.into()
+    }
+}
+
+impl From<BegCursor> for EndCursor {
+    fn from(cur: BegCursor) -> Self {
+        Self {
+            offset: cur.offset,
+            cycle: cur.cycle,
+        }
+    }
+}
+
+impl From<&BegCursor> for EndCursor {
+    fn from(cur: &BegCursor) -> Self {
+        Self {
+            offset: cur.offset,
+            cycle: cur.cycle,
+        }
+    }
+}
+
+impl From<EndCursor> for BegCursor {
+    fn from(cur: EndCursor) -> Self {
+        Self {
+            offset: cur.offset,
+            cycle: cur.cycle,
+        }
+    }
+}
+
+impl From<&EndCursor> for BegCursor {
+    fn from(cur: &EndCursor) -> Self {
+        Self {
+            offset: cur.offset,
+            cycle: cur.cycle,
         }
     }
 }

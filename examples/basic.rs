@@ -41,7 +41,6 @@ fn main() {
         // NOTE: name - map() - alternatives get,request,
         info!("Entering Writer");
         let mut written_bytes = 0;
-        // FIXME: There's some problem when the chunksize is >= (N/2)+1 - won't proceed
         while let Some(mut buf) = tx.map(17) {
             // NOTE: tx get's mutable borrowed by map() so that
             //       calling it here becomes a compiler error
@@ -73,7 +72,6 @@ fn main() {
                     available.as_ptr() as isize - first + available.len() as isize,
                     available.cycle()
                 );
-                // drop(available);
                 // sleep(Duration::from_millis(10));
             }
         }

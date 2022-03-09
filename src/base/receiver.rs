@@ -31,7 +31,7 @@ impl Receiver {
         let cur = {
             let mut ch = channel.inner.lock();
             let cur = ch.reads.beg.to_end(None);
-            ch.outstanding_reads.insert(cur.to_beg(None));
+            ch.outstanding_reads.insert(cur.into());
             cur
         };
         Receiver { channel, cur }
@@ -50,6 +50,11 @@ impl Receiver {
         let (interval, ptr) = {
             let mut ch = self.channel.inner.lock();
 
+            // FIXME: Got
+            // R1' panicked at 'cur:61441(11048) reads:61441(11048)-4895(11049) high:-1', src/base/receiver.rs:53:13
+            //
+            // Shouldn't high mark be set here. I'm inclined to think this is mostly a fine state
+            // but that high mark should still be set.
             assert!(
                 (ch.reads.high_mark.is_some() && ch.reads.end.cycle == ch.reads.beg.cycle + 1)
                     || (ch.reads.high_mark.is_none() && ch.reads.end.cycle == ch.reads.beg.cycle),
@@ -58,18 +63,26 @@ impl Receiver {
                 ch.reads
             );
             assert!(
-                ch.reads.beg <= self.cur.to_beg(None) && self.cur <= ch.reads.end,
+                ch.reads.beg <= self.cur.into() && self.cur <= ch.reads.end,
                 "cur:{} reads:{}",
                 self.cur,
                 ch.reads
             );
 
+            // Only wrap if there's a cycle difference.
+            //
+            // This is particularly important for the case where `reads.beg`
+            // and `reads.end` are in different cycles, but the `self.cur` is
+            // at `reads.end` and that happens to correspond to the `high_mark`.
             let beg = self.cur.to_beg(if self.cur.cycle == ch.reads.end.cycle {
                 None
             } else {
                 ch.reads.high_mark
             });
 
+            // Compute the interval to read
+            // It will never straddle the cycle boundary so the high_mark
+            // should never be set.
             let interval = if beg.cycle == ch.reads.end.cycle {
                 Interval {
                     beg,
@@ -89,15 +102,15 @@ impl Receiver {
                     high_mark: None,
                 }
             };
+            assert!(interval.high_mark.is_none());
             if interval.len() == 0 {
                 return None;
             }
 
-            assert!(interval.end <= ch.reads.end, "cur:{} ch:{}", interval, ch);
             let ptr = unsafe { ch.ptr.as_ptr().offset(interval.beg.offset) as *const _ };
 
             ch.outstanding_reads.insert(interval.beg);
-            ch.outstanding_reads.remove(&self.cur.to_beg(None));
+            ch.outstanding_reads.remove(&self.cur.into());
             (interval, ptr)
         };
         self.cur = interval.end;
@@ -120,13 +133,10 @@ impl Receiver {
         // otherwise it's just the min over all outstanding reads.
         let mut ch = self.channel.inner.lock();
         ch.outstanding_reads.remove(&interval.beg);
-        ch.outstanding_reads.insert(interval.end.to_beg(None));
+        ch.outstanding_reads.insert(interval.end.into());
         let c0 = ch.reads.beg.cycle;
         let before = ch.reads;
-        ch.reads.beg = *ch
-            .outstanding_reads
-            .min()
-            .unwrap_or(&interval.end.to_beg(None));
+        ch.reads.beg = *ch.outstanding_reads.min().unwrap_or(&interval.end.into());
         let c1 = ch.reads.beg.cycle;
         if c1 > c0 {
             trace!(

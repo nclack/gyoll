@@ -54,7 +54,7 @@ pub struct Region<'a> {
 
 impl<'a> Region<'a> {
     // for debuggging
-    pub fn cycle(&self)->isize {
+    pub fn cycle(&self) -> isize {
         self.cur.beg.cycle
     }
 }
