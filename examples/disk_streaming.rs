@@ -1,14 +1,17 @@
-//! This is meant ot be a practical (though simulated) example of streaming
+//! This is meant to be a practical (though simulated) example of streaming
 //! raw video data to disk
 
 use std::{
-    panic, process,
+    io::Write,
+    panic,
+    path::PathBuf,
+    process,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
     thread::{self, sleep, spawn, JoinHandle},
-    time::{Duration, Instant}, path::PathBuf, io::Write,
+    time::{Duration, Instant},
 };
 
 use gyoll::base::{Channel, ChannelFactory, Receiver, Sender};
@@ -68,40 +71,41 @@ fn consumer(rx: Receiver, name: &'static str) -> (JoinHandle<()>, &str) {
         .name(name.into())
         .spawn(move || {
             info!("{}: Entering Reader", name);
-            let mut out = std::fs::File::create(
-                [std::env::temp_dir(), "disk_streaming.raw".into()]
-                    .iter()
-                    .collect::<PathBuf>(),
-            ).expect("Could not open output file");
+            let path = [std::env::temp_dir(), "disk_streaming.raw".into()]
+                .iter()
+                .collect::<PathBuf>();
             let mut read_bytes = 0;
-            let mut first = None;
-            let t0=Instant::now();
-            while rx.is_open() {
-                while let Some(available) = rx.next() {
-                    if first.is_none() {
-                        first = Some(available.as_ptr() as isize);
+            let t0 = Instant::now();
+            {
+                let mut out =
+                    std::fs::File::create(path.clone()).expect("Could not open output file");
+                // let mut out = std::io::BufWriter::new(out);
+                let mut first = None;
+                while rx.is_open() {
+                    while let Some(available) = rx.next() {
+                        if first.is_none() {
+                            first = Some(available.as_ptr() as isize);
+                        }
+                        out.write_all(&available).expect("Write failed");
+                        read_bytes += available.len();
+                        debug!(
+                            "{}: 0x{:0x} {:4}:{:4}",
+                            name,
+                            available.as_ptr() as isize,
+                            available.as_ptr() as isize - first.unwrap(),
+                            available.as_ptr() as isize - first.unwrap() + available.len() as isize,
+                        );
                     }
-                    out.write_all(&available).expect("Write failed");
-                    read_bytes += available.len();
-                    debug!(
-                        "{}: 0x{:0x} {:4}:{:4}",
-                        // "{}: 0x{:0x} {:4}:{:4} - {:?}",
-                        name,
-                        available.as_ptr() as isize,
-                        available.as_ptr() as isize - first.unwrap(),
-                        available.as_ptr() as isize - first.unwrap() + available.len() as isize,
-                        // &available[0..std::cmp::min(20, available.len())]
-                    );
-                    // sleep(Duration::from_millis(10));
                 }
             }
-            let dt=Instant::now()-t0;
+            let dt = Instant::now() - t0;
             info!(
-                "{}: Read - total: {} ({} GB). {} GB/s",
+                "{}: Read - total: {} ({} GB). Wrote {} GB/s to {}",
                 name,
                 read_bytes,
                 (read_bytes as f32) * 1e-9,
-                (read_bytes as f64)*1e-9/dt.as_secs_f64()
+                (read_bytes as f64) * 1e-9 / dt.as_secs_f64(),
+                path.to_string_lossy()
             );
             info!("{}: Exiting Reader", name);
         })
