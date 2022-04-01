@@ -1,6 +1,6 @@
 use std::{mem::size_of_val, sync::Arc};
 
-use log::{info, trace};
+use log::{info, trace, warn};
 use parking_lot::lock_api::RawRwLockUpgrade;
 use parking_lot::{RwLock, RwLockUpgradableReadGuard};
 
@@ -44,18 +44,24 @@ impl Sender {
                 return None;
             }
 
-            let prev_write_head = ch.writes.end;
+            let prev = (ch.writes.beg,ch.writes.end);
             let inc = ch.writes.end.next_region(nbytes, ch.capacity);
 
             // Reserve the region even though we haven't fully acquired it yet.
             //
+            
             // The new region will be > any outstanding_write, but if there
             // are none, we need to update the write_tail. This will assist
             // with wrapping around a cycle sometimes.
-            if ch.outstanding_writes.is_empty() {
-                ch.writes.beg = inc.beg;
-            }
+            //
+            // The min is to deal with when there are multiple blocked write
+            // requests waiting.
+            // if ch.outstanding_writes.is_empty() {
+                // warn!("HERE");
+                // ch.writes.beg = ch.writes.beg.min(inc.beg);
+            // }
             ch.writes.end = inc.end;
+            assert!(ch.writes.end>=ch.writes.beg.into());
             ch.outstanding_writes.insert(inc);
 
             fn collide(w: &EndCursor, r: &BegCursor) -> bool {
@@ -86,7 +92,10 @@ impl Sender {
                 // when there are no outstanding regions. But that's precisely
                 // the point where write_head is guaranteed to be correct.
                 ch.outstanding_writes.remove(&inc);
-                ch.writes.end = ch.writes.end.min(prev_write_head);
+                ch.writes.end = ch.writes.end.min(prev.1);
+                if ch.writes.end<ch.writes.beg.to_end(inc.high_mark){
+                    warn!("{}",ch);
+                }
                 return None;
             }
 
@@ -122,7 +131,7 @@ impl Sender {
         })
     }
 
-    pub(super) fn unreserve(&self, interval: &Interval) {
+   pub(super) fn unreserve(&self, interval: &Interval) {
         let mut ch = self.channel.inner.lock();
         ch.outstanding_writes.remove(interval);
 

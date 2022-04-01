@@ -80,14 +80,14 @@ impl BegCursor {
 
     pub(crate) fn to_end(&self, high_mark: Option<isize>) -> EndCursor {
         if let Some(high_mark) = high_mark {
-            assert_eq!(self.offset, 0);
-            EndCursor {
-                offset: high_mark,
-                cycle: self.cycle - 1,
+            if self.offset == 0 {
+                return EndCursor {
+                    offset: high_mark,
+                    cycle: self.cycle - 1,
+                };
             }
-        } else {
-            self.into()
-        }
+        };
+        self.into()
     }
 }
 

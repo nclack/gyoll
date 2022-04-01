@@ -51,23 +51,35 @@ impl Receiver {
             let mut ch = self.channel.inner.lock();
 
             // FIXME: Got
-            // R1' panicked at 'cur:61441(11048) reads:61441(11048)-4895(11049) high:-1', src/base/receiver.rs:53:13
+            // 'R1' panicked at 'cur:61441(11048) reads:61441(11048)-4895(11049) high:-1'
+            // 'R1' panicked at 'cur:61440(10762) reads:61440(10762)-45073(10763) high:-1'
             //
             // Shouldn't high mark be set here. I'm inclined to think this is mostly a fine state
             // but that high mark should still be set.
             assert!(
                 (ch.reads.high_mark.is_some() && ch.reads.end.cycle == ch.reads.beg.cycle + 1)
                     || (ch.reads.high_mark.is_none() && ch.reads.end.cycle == ch.reads.beg.cycle),
-                "cur:{} reads:{}",
+                "cur:{} reads:{} ch:{:?}",
                 self.cur,
-                ch.reads
+                ch.reads,
+                ch
             );
             assert!(
                 ch.reads.beg <= self.cur.into() && self.cur <= ch.reads.end,
-                "cur:{} reads:{}",
+                "cur:{} reads:{} ch:{:?}",
                 self.cur,
-                ch.reads
+                ch.reads,
+                ch
             );
+
+            // ^^^^ 
+            // thread 'R1' panicked at 'cur:61457(10752) reads:61457(10752)-4130(10753) high:-1 
+            // ch:RawChannel { 
+                // ptr: 0x150008000, capacity: 65536, is_accepting_writes: false, 
+                // writes: Interval { beg: BegCursor { cycle: 10753, offset: 4130 }, end: EndCursor { cycle: 10752, offset: 61457 }, high_mark: None }, 
+                // reads: Interval { beg: BegCursor { cycle: 10752, offset: 61457 }, end: EndCursor { cycle: 10753, offset: 4130 }, high_mark: None }, 
+                // outstanding_writes: {}, outstanding_reads: Counter { inner: {BegCursor { cycle: 10752, offset: 61457 }: 3} } }', 
+            // src/base/receiver.rs:59:13
 
             // Only wrap if there's a cycle difference.
             //
